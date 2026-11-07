@@ -5,6 +5,12 @@ const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replac
 const rgb = ([r, g, b]: [number, number, number]) => `rgb(${Math.round(r * 255)},${Math.round(g * 255)},${Math.round(b * 255)})`;
 const n = (v: number) => Math.round(v * 100) / 100;
 
+function base64(bytes: Uint8Array): string {
+  let bin = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(bin);
+}
+
 export function sheetToSvg(sheet: Sheet): string {
   const H = sheet.height;
   const y = (v: number) => n(H - v);
@@ -19,6 +25,11 @@ export function sheetToSvg(sheet: Sheet): string {
       }
       case 'circle':
         return `<circle cx="${n(p.c[0])}" cy="${y(p.c[1])}" r="${n(p.r)}" fill="${p.fill ? c : 'none'}" stroke="${c}" stroke-width="${p.w}"/>`;
+      case 'image': {
+        const img = sheet.images?.[p.ref];
+        if (!img) return '';
+        return `<image x="${n(p.p[0])}" y="${y(p.p[1] + p.h)}" width="${n(p.w)}" height="${n(p.h)}" preserveAspectRatio="none" href="data:image/jpeg;base64,${base64(img.jpeg)}"/>`;
+      }
       case 'text': {
         const anchor = p.align === 'c' ? 'middle' : p.align === 'r' ? 'end' : 'start';
         const rot = p.angle ? ` transform="rotate(${n(-p.angle)} ${n(p.p[0])} ${y(p.p[1])})"` : '';

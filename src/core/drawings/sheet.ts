@@ -11,7 +11,16 @@ export type Prim =
   | { k: 'line'; a: Pt; b: Pt; w: number; layer: Layer; dash?: boolean }
   | { k: 'poly'; pts: Pt[]; closed: boolean; w: number; layer: Layer; fill?: boolean }
   | { k: 'circle'; c: Pt; r: number; w: number; layer: Layer; fill?: boolean }
-  | { k: 'text'; p: Pt; s: string; size: number; layer: Layer; angle?: number; align?: 'l' | 'c' | 'r'; bold?: boolean };
+  | { k: 'text'; p: Pt; s: string; size: number; layer: Layer; angle?: number; align?: 'l' | 'c' | 'r'; bold?: boolean }
+  /** Foto JPEG: `p` es la esquina inferior izquierda, `ref` la clave en Sheet.images */
+  | { k: 'image'; p: Pt; w: number; h: number; ref: string; layer: Layer };
+
+/** Imagen JPEG para incrustar en el PDF (y data URL para la vista previa) */
+export interface SheetImage {
+  jpeg: Uint8Array;
+  width: number;
+  height: number;
+}
 
 export interface Sheet {
   /** Nombre corto para la lista de hojas (Línea, SP01...) */
@@ -19,6 +28,7 @@ export interface Sheet {
   width: number;
   height: number;
   prims: Prim[];
+  images?: Record<string, SheetImage>;
 }
 
 /** Color de cada capa (RGB 0..1) para PDF y SVG */

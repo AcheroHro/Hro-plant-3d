@@ -1,6 +1,7 @@
 import React, { useRef } from 'react';
 import { usePipingStore } from '../store/usePipingStore';
 import { useUiConfigStore } from '../store/useUiConfigStore';
+import { useProjectStore } from '../store/useProjectStore';
 import { PcfExporter } from '../core/exporters/PcfExporter';
 import { downloadFile } from '../utils/fileDownloader';
 
@@ -29,7 +30,11 @@ export const TopNavigation: React.FC = () => {
   const graph = usePipingStore((s) => s.graph);
   const loadSpecFiles = usePipingStore((s) => s.loadSpecFiles);
   const loadBuiltInSpec = usePipingStore((s) => s.loadBuiltInSpec);
-  const importPcfFile = usePipingStore((s) => s.importPcfFile);
+  const projectName = useProjectStore((s) => s.projectName);
+  const toggleProjects = useProjectStore((s) => s.toggleProjects);
+  const toggleField = useProjectStore((s) => s.toggleField);
+  const importFiles = useProjectStore((s) => s.importFiles);
+  const noteCount = useProjectStore((s) => s.notes.length);
 
   const palettes = useUiConfigStore((s) => s.palettes);
   const togglePaletteOpen = useUiConfigStore((s) => s.togglePaletteOpen);
@@ -79,11 +84,11 @@ export const TopNavigation: React.FC = () => {
   };
 
   const handlePcfUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const content = await file.text();
-    importPcfFile(content, file.name);
+    const files = Array.from(e.target.files ?? []);
     if (pcfInputRef.current) pcfInputRef.current.value = '';
+    if (!files.length) return;
+    // Cada PCF abre un proyecto nuevo y queda como base para registrar los cambios de campo
+    await importFiles(await Promise.all(files.map(async (f) => ({ name: f.name, text: await f.text() }))));
   };
 
   const handleQuickExportPcf = () => {
@@ -242,13 +247,31 @@ export const TopNavigation: React.FC = () => {
         <input
           ref={pcfInputRef}
           type="file"
-          accept=".pcf,.txt"
+          accept=".pcf,.txt,.achero"
+          multiple
           onChange={handlePcfUpload}
           className="hidden"
         />
 
-        {/* Grupo Ribbon: Line Number + Spec Selector + Size Selector */}
+        {/* Grupo Ribbon: Proyecto + Line Number + Spec Selector + Size Selector */}
         <div className="flex items-center space-x-1.5 shrink-0">
+          <button
+            type="button"
+            onClick={toggleProjects}
+            className="h-9 max-w-[9rem] flex flex-col items-start justify-center bg-[#161920] border border-[#0696d7]/60 hover:border-[#38bdf8] rounded px-1.5"
+            title="Proyectos guardados en este equipo"
+          >
+            <span className="text-[7px] uppercase text-slate-400 font-bold leading-none mb-0.5">Proyecto ▾</span>
+            <span className="text-[11px] font-bold text-slate-100 leading-tight truncate max-w-full">{projectName}</span>
+          </button>
+          <button
+            type="button"
+            onClick={toggleField}
+            className="h-9 px-2.5 rounded bg-orange-600/20 border border-orange-500/70 text-[11px] font-bold text-orange-300 hover:bg-orange-600/30"
+            title="Cambios respecto del PCF de Plant, notas con fotos e informe de campo"
+          >
+            Campo{noteCount ? ` · ${noteCount}` : ""}
+          </button>
           {/* Selector / Editor de Line Number (como Plant 3D Route Pipe) */}
           <div className="flex flex-col bg-[#161920] border border-[#343b48] rounded px-1.5 py-0.5">
             <span className="text-[7px] uppercase text-slate-400 font-bold leading-none mb-0.5">

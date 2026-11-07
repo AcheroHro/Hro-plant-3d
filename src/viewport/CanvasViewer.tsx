@@ -10,7 +10,9 @@ import { createValveGeometry } from './geometries/valveGeometry';
 import { createCapGeometry } from './geometries/capGeometry';
 import { disposeObject } from './geometries/geometryUtils';
 import { computeSpools } from '../core/spools/spoolEngine';
-import { SPOOL_COLORS, ERECTION_COLOR } from './spoolColors';
+import { SPOOL_COLORS, ERECTION_COLOR, FIELD_COLORS, FIELD_UNCHANGED_COLOR } from './spoolColors';
+import { useProjectStore } from '../store/useProjectStore';
+import { diffStates } from '../core/field/changeLog';
 import { isFaceEnd } from '../core/graph/PipingGraph';
 import { findScreenMagneticSnap } from './snapping/magneticSnap';
 
@@ -31,6 +33,8 @@ export const CanvasViewer: React.FC = () => {
   const numpadValue = usePipingStore((s) => s.numpadValue);
   const collidingComponentIds = usePipingStore((s) => s.collidingComponentIds);
   const spoolView = usePipingStore((s) => s.spoolView);
+  const fieldView = useProjectStore((s) => s.fieldView);
+  const fieldBaseline = useProjectStore((s) => s.baseline);
   const triggerFrameAll = usePipingStore((s) => s.triggerFrameAll);
   const setSnappedPortId = usePipingStore((s) => s.setSnappedPortId);
   const selectPortAndAlign = usePipingStore((s) => s.selectPortAndAlign);
@@ -342,7 +346,27 @@ export const CanvasViewer: React.FC = () => {
     const spoolResult = spoolView ? computeSpools(graph) : null;
     const spoolColorIndex = new Map(spoolResult?.spools.map((sp) => [sp.id, sp.colorIndex]) ?? []);
     const spoolMats = new Map<number, THREE.Material>();
+    // Vista de campo: lo que cambió respecto del PCF de Plant, por color
+    const fieldColor = new Map<string, number>();
+    if (fieldView && fieldBaseline) {
+      for (const ch of diffStates(fieldBaseline, graph.serialize())) {
+        const color = FIELD_COLORS[ch.kind];
+        for (const id of ch.componentIds ?? [ch.componentId]) {
+          // Lo agregado o editado se ve antes que lo solo movido
+          if (!fieldColor.has(id) || ch.kind === 'added' || ch.kind === 'edited') fieldColor.set(id, color);
+        }
+      }
+    }
     const spoolMaterial = (compId: string): THREE.Material | null => {
+      if (fieldView && fieldBaseline) {
+        const color = fieldColor.get(compId) ?? FIELD_UNCHANGED_COLOR;
+        let m = spoolMats.get(color);
+        if (!m) {
+          m = new THREE.MeshStandardMaterial({ color, roughness: 0.45, metalness: 0.3, side: THREE.DoubleSide });
+          spoolMats.set(color, m);
+        }
+        return m;
+      }
       if (!spoolResult) return null;
       const sid = spoolResult.spoolOf.get(compId);
       const color = sid ? SPOOL_COLORS[(spoolColorIndex.get(sid) ?? 0) % SPOOL_COLORS.length] : ERECTION_COLOR;
@@ -709,7 +733,7 @@ export const CanvasViewer: React.FC = () => {
       const arrowHelper = new THREE.ArrowHelper(arrowDir, activePort.position, Math.min(260, lenMm), 0x22c55e, 52, 32);
       cursorGroup.add(arrowHelper);
     }
-  }, [graph, version, collidingComponentIds, selectedPortId, selectedComponentId, activeDirection, numpadValue, spoolView]);
+  }, [graph, version, collidingComponentIds, selectedPortId, selectedComponentId, activeDirection, numpadValue, spoolView, fieldView, fieldBaseline]);
 
   // Gestos multitáctiles y selección 3D CAD:
   // - Tap corto (< 8px): Selecciona puerto abierto (boca/ramal) o selecciona cañería/accesorio en 3D

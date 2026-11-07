@@ -11,7 +11,7 @@ import {
   loadSpecFromFiles,
   savePreferredFamilies
 } from '../core/specs/specLoader';
-import { saveGraphToIndexedDb, loadGraphFromIndexedDb, clearGraphIndexedDb } from '../persistence/indexedDbStorage';
+import { saveGraphToIndexedDb, loadActiveProject, ProjectRecord } from '../persistence/indexedDbStorage';
 import { detectPipingCollisions } from '../viewport/collision/collisionDetector';
 import { calculateElbowPlacement } from '../core/math/elbowSolver';
 import { SerializedGraphState, FieldWeldKind, ComponentType, NippleEndFinish, Port, SpecFitting } from '../types/piping';
@@ -51,7 +51,10 @@ export interface PipingState {
   isSpoolsOpen: boolean;
 
   // Acciones
-  initialize: () => Promise<void>;
+  /** Carga la spec y el proyecto activo; devuelve el proyecto abierto */
+  initialize: () => Promise<ProjectRecord | null>;
+  /** Reemplaza el modelo (al abrir otro proyecto): limpia deshacer y encuadra */
+  loadGraphState: (state: SerializedGraphState | null, message?: string) => void;
   setCameraMode: (mode: CameraMode) => void;
   setCameraViewPreset: (preset: 'ISO' | 'TOP' | 'FRONT' | 'RIGHT') => void;
   setActiveDirection: (dir: THREE.Vector3) => void;
@@ -99,7 +102,8 @@ export interface PipingState {
   loadSpecFiles: (files: File[]) => Promise<void>;
   setPreferredFamily: (category: PartCategory, familyId: string | null) => void;
   loadBuiltInSpec: (specName: string) => Promise<void>;
-  importPcfFile: (content: string, fileName: string) => void;
+  /** Importa un PCF en el modelo; devuelve el estado importado (el guardado lo hace el proyecto) */
+  importPcfFile: (content: string, fileName: string) => SerializedGraphState | null;
 }
 
 export const usePipingStore = create<PipingState>((set, get) => {
@@ -200,6 +204,7 @@ export const usePipingStore = create<PipingState>((set, get) => {
     specNotes: [],
 
     initialize: async () => {
+      let project: ProjectRecord | null = null;
       try {
         // 1) Última spec usada (IndexedDB, sirve sin conexión) 2) spec integrada 3) catálogo demo
         let loaded: LoadedSpec | null = null;
@@ -228,7 +233,8 @@ export const usePipingStore = create<PipingState>((set, get) => {
         initialGraph.connectionRules = loaded.rules;
 
         // Cargar persistencia si existe
-        const savedState = await loadGraphFromIndexedDb();
+        project = await loadActiveProject();
+        const savedState = project?.state;
         if (savedState && Object.keys(savedState.components).length > 0) {
           initialGraph.deserialize(savedState);
           if (savedState.activeLineNumber) set({ lineNumber: savedState.activeLineNumber });
@@ -264,10 +270,40 @@ export const usePipingStore = create<PipingState>((set, get) => {
         const collisions = detectPipingCollisions(initialGraph);
         set({ graph: initialGraph, collidingComponentIds: collisions.collidingComponentIds });
         applyLoadedSpec(loaded, origin);
+        if (project) set({ statusMessage: `Proyecto "${project.name}" abierto. ${get().statusMessage}` });
       } catch (err) {
         console.error('Error inicializando estado de piping:', err);
         set({ statusMessage: 'Error al inicializar la base de datos de especificaciones.' });
       }
+      return project;
+    },
+
+    loadGraphState: (state, message) => {
+      const { specCode, nominalDiameter } = get();
+      const g = new PipingGraph(specCode, nominalDiameter, 'SCH 40');
+      g.connectionRules = get().graph.connectionRules;
+      if (state) {
+        g.deserialize(state);
+        g.activeSpec = specCode;
+      }
+      undoSnapshots = [];
+      redoSnapshots = [];
+      const open = g.getOpenPorts();
+      const last = open.length ? open[open.length - 1] : null;
+      set({
+        graph: g,
+        lineNumber: state?.activeLineNumber || g.activeLineNumber || get().lineNumber,
+        selectedPortId: last?.id ?? null,
+        selectedComponentId: null,
+        snappedPortId: null,
+        activeDirection: last ? last.direction.clone().normalize() : new THREE.Vector3(1, 0, 0),
+        collidingComponentIds: detectPipingCollisions(g).collidingComponentIds,
+        canUndo: false,
+        canRedo: false,
+        version: get().version + 1,
+        triggerFrameAll: get().triggerFrameAll + 1,
+        statusMessage: message ?? get().statusMessage
+      });
     },
 
     loadSpecFiles: async (files: File[]) => {
@@ -632,9 +668,10 @@ export const usePipingStore = create<PipingState>((set, get) => {
         });
         if (componentCount === 0) {
           set({ statusMessage: `El archivo "${fileName}" no contenía bloques PCF válidos.` });
-          return;
+          return null;
         }
-        saveGraphToIndexedDb(importedGraph.serialize());
+        undoSnapshots = [];
+        redoSnapshots = [];
         const openPorts = importedGraph.getOpenPorts();
         const lastPort = openPorts.length > 0 ? openPorts[openPorts.length - 1] : null;
         const collisions = detectPipingCollisions(importedGraph);
@@ -652,10 +689,14 @@ export const usePipingStore = create<PipingState>((set, get) => {
             Object.keys(skipped).length
               ? ` Omitidos (Plant los regenera): ${Object.entries(skipped).map(([k, n]) => `${n} ${k}`).join(', ')}.`
               : ''
-          }${warnings.length ? ` Avisos: ${warnings.join(' ')}` : ''}`
+          }${warnings.length ? ` Avisos: ${warnings.join(' ')}` : ''}`,
+          canUndo: false,
+          canRedo: false
         });
+        return importedGraph.serialize();
       } catch (e: unknown) {
         set({ statusMessage: `Error importando PCF: ${(e as Error).message}` });
+        return null;
       }
     },
 
@@ -1220,9 +1261,11 @@ export const usePipingStore = create<PipingState>((set, get) => {
 
     resetGraph: async () => {
       pushUndoSnapshot();
-      await clearGraphIndexedDb();
       const specName = get().specCode || 'CS150';
       const newGraph = new PipingGraph(specName, get().nominalDiameter, 'SCH 40');
+      newGraph.connectionRules = get().graph.connectionRules;
+      newGraph.activeLineNumber = get().lineNumber;
+      saveGraphToIndexedDb(newGraph.serialize());
       set({
         graph: newGraph,
         selectedPortId: null,

@@ -11,6 +11,11 @@ import { ExportModal } from './ui/ExportModal';
 import { ToolPaletteModal } from './ui/ToolPaletteModal';
 import { QuickToolPalette } from './ui/QuickToolPalette';
 import { PropertiesInspector } from './ui/PropertiesInspector';
+import { ProjectsModal } from './ui/ProjectsModal';
+import { FieldModal } from './ui/FieldModal';
+import { PwaBanner } from './ui/PwaBanner';
+import { useProjectStore } from './store/useProjectStore';
+import { listenIncomingFiles } from './pwa/pwa';
 
 export default function App() {
   const initialize = usePipingStore((s) => s.initialize);
@@ -18,7 +23,16 @@ export default function App() {
   const toggleExport = usePipingStore((s) => s.toggleExport);
 
   useEffect(() => {
-    initialize();
+    let alive = true;
+    initialize().then((project) => {
+      if (!alive) return;
+      useProjectStore.getState().attach(project);
+      // PCF abiertos con la app o compartidos desde WhatsApp / Drive: un proyecto por archivo
+      listenIncomingFiles((files) => void useProjectStore.getState().importFiles(files));
+    });
+    return () => {
+      alive = false;
+    };
   }, [initialize]);
 
   return (
@@ -55,6 +69,9 @@ export default function App() {
       {/* Modal de Cómputo de Materiales (BOM) */}
       <BomModal />
       <SpoolsModal />
+      <ProjectsModal />
+      <FieldModal />
+      <PwaBanner />
 
       {/* Modal de Exportación de Entregables CAD (PCF y DXF) */}
       <ExportModal isOpen={isExportOpen} onClose={toggleExport} />

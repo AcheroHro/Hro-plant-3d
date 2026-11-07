@@ -11,7 +11,22 @@ const f = (v: number) => (Math.round(v * PT * 100) / 100).toString();
 /** Caracteres de WinAnsi fuera de Latin-1 */
 const WIN_ANSI: Record<string, number> = { '…': 0x85, '–': 0x96, '—': 0x97, '‘': 0x91, '’': 0x92, '“': 0x93, '”': 0x94, '•': 0x95, '€': 0x80 };
 
-function pdfString(s: string): string {
+/** Signos que Helvetica (WinAnsi) no tiene: se escriben con equivalentes ASCII */
+const ASCII_FALLBACK: [RegExp, string][] = [
+  [/→/g, '->'],
+  [/←/g, '<-'],
+  [/−/g, '-'],
+  [/≈/g, '~'],
+  [/≤/g, '<='],
+  [/≥/g, '>=']
+];
+
+export function pdfSafeText(s: string): string {
+  return ASCII_FALLBACK.reduce((t, [re, rep]) => t.replace(re, rep), s);
+}
+
+function pdfString(raw: string): string {
+  const s = pdfSafeText(raw);
   let out = '';
   for (const ch of s) {
     let code = WIN_ANSI[ch] ?? ch.charCodeAt(0);
@@ -40,6 +55,8 @@ function circlePath(cx: number, cy: number, r: number): string {
   ].join('\n');
 }
 
+const imageName = (ref: string) => `Im${ref.replace(/[^A-Za-z0-9]/g, '')}`;
+
 function primOps(p: Prim): string {
   const c = LAYER_COLOR[p.layer];
   switch (p.k) {
@@ -52,8 +69,10 @@ function primOps(p: Prim): string {
     }
     case 'circle':
       return `${color(c, true)} ${color(c, false)} ${f(p.w)} w [] 0 d ${circlePath(p.c[0], p.c[1], p.r)} ${p.fill ? 'b' : 's'}`;
+    case 'image':
+      return `q ${f(p.w)} 0 0 ${f(p.h)} ${f(p.p[0])} ${f(p.p[1])} cm /${imageName(p.ref)} Do Q`;
     case 'text': {
-      const w = textWidth(p.s, p.size, p.bold);
+      const w = textWidth(pdfSafeText(p.s), p.size, p.bold);
       const shift = p.align === 'c' ? -w / 2 : p.align === 'r' ? -w : 0;
       const a = ((p.angle ?? 0) * Math.PI) / 180;
       const cos = Math.cos(a);
@@ -85,9 +104,23 @@ export function sheetsToPdf(sheets: Sheet[], meta: PdfMeta = {}): Uint8Array {
   for (const sheet of sheets) {
     const ops = ['1 J 1 j', ...sheet.prims.map(primOps)].join('\n');
     const content = add(`<< /Length ${ops.length} >>\nstream\n${ops}\nendstream`);
+    // Fotos: el JPEG va tal cual (DCTDecode), el PDF no lo recomprime
+    const xobjects: string[] = [];
+    for (const ref of new Set(sheet.prims.flatMap((p) => (p.k === 'image' ? [p.ref] : [])))) {
+      const img = sheet.images?.[ref];
+      if (!img) continue;
+      let bin = '';
+      for (let i = 0; i < img.jpeg.length; i += 0x8000) bin += String.fromCharCode(...img.jpeg.subarray(i, i + 0x8000));
+      const id = add(
+        `<< /Type /XObject /Subtype /Image /Width ${img.width} /Height ${img.height} /ColorSpace /DeviceRGB ` +
+          `/BitsPerComponent 8 /Filter /DCTDecode /Length ${bin.length} >>\nstream\n${bin}\nendstream`
+      );
+      xobjects.push(`/${imageName(ref)} ${id} 0 R`);
+    }
+    const xobj = xobjects.length ? ` /XObject << ${xobjects.join(' ')} >>` : '';
     const page = add(
       `<< /Type /Page /Parent ${pagesId} 0 R /MediaBox [0 0 ${f(sheet.width)} ${f(sheet.height)}] ` +
-        `/Resources << /Font << /F1 ${font1} 0 R /F2 ${font2} 0 R >> >> /Contents ${content} 0 R >>`
+        `/Resources << /Font << /F1 ${font1} 0 R /F2 ${font2} 0 R >>${xobj} >> /Contents ${content} 0 R >>`
     );
     pageIds.push(page);
   }
