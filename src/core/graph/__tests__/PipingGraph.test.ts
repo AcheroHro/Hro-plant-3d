@@ -3,6 +3,8 @@ import * as THREE from 'three';
 import { PipingGraph } from '../PipingGraph';
 import { SpecDatabaseReader } from '../../specs/SpecDatabaseReader';
 import { calculateElbowPlacement } from '../../math/elbowSolver';
+import { PcfExporter } from '../../exporters/PcfExporter';
+import { PcfImporter } from '../../importers/PcfImporter';
 
 describe('PipingGraph - Grafo Topológico y Ruteo de Cañerías', () => {
   let reader: SpecDatabaseReader;
@@ -283,5 +285,78 @@ describe('PipingGraph - Grafo Topológico y Ruteo de Cañerías', () => {
     expect(bom.some(b => b.type === 'TEE')).toBe(true);
     expect(bom.some(b => b.type === 'REDUCER')).toBe(true);
     expect(bom.some(b => b.type === 'CAP')).toBe(true);
+  });
+
+  it('Debe partir un caño existente en 2 niples al insertar una Te en línea y calcular extremos (Plano/Bisel)', () => {
+    const graph = new PipingGraph('CS150', 2, 'SCH 40');
+    const pipeSpec = reader.findPipe(2, 'CS150')!;
+    const teeSpec = reader.findTee(2, 'CS150')!;
+
+    const origPipe = graph.addPipe(new THREE.Vector3(0, 0, 0), new THREE.Vector3(1000, 0, 0), pipeSpec);
+    const splitRes = graph.splitPipeWithFitting(origPipe.id, teeSpec, pipeSpec, {
+      offsetMm: 500,
+      branchDir: new THREE.Vector3(0, 0, 1)
+    });
+
+    expect(splitRes).not.toBeNull();
+    const C = teeSpec.runTakeOff || 63.5;
+    expect(splitRes!.pipe1.parameters.cutLength).toBeCloseTo(500 - C, 1);
+    expect(splitRes!.pipe2.parameters.cutLength).toBeCloseTo(500 - C, 1);
+
+    const cutList = graph.calculatePipeCutList();
+    expect(cutList.length).toBe(2);
+    expect(cutList[0].nippleId).toBe('N-01');
+    expect(cutList[0].endFinish1).toBe('Plano'); // Extremo inicial libre
+    expect(cutList[0].endFinish2).toBe('Bisel'); // Conectado a la Te por soldadura a tope
+    expect(cutList[1].nippleId).toBe('N-02');
+    expect(cutList[1].endFinish1).toBe('Bisel'); // Conectado a la Te
+    expect(cutList[1].endFinish2).toBe('Plano'); // Extremo final libre
+  });
+
+  it('Debe propagar cambios aguas abajo al modificar el largo de un caño o rotar un ramal de Te', () => {
+    const graph = new PipingGraph('CS150', 2, 'SCH 40');
+    const pipeSpec = reader.findPipe(2, 'CS150')!;
+    const teeSpec = reader.findTee(2, 'CS150')!;
+
+    const pipe1 = graph.addPipe(new THREE.Vector3(0, 0, 0), new THREE.Vector3(500, 0, 0), pipeSpec);
+    const tee = graph.addTee(pipe1.ports[1], new THREE.Vector3(0, 0, 1), teeSpec);
+    const branchStart = tee.ports[2].position.clone();
+    const branchPipe = graph.addPipe(
+      branchStart,
+      branchStart.clone().add(new THREE.Vector3(0, 0, 400)),
+      pipeSpec
+    );
+    graph.connectPorts(tee.ports[2].id, branchPipe.ports[0].id, 'BUTTWELD');
+
+    // 1. Alargar pipe1 de 500 a 700 mm (+200 mm en +X) -> la Te y el caño de ramal deben moverse +200 mm en X
+    const prevTeeX = tee.ports[0].position.x;
+    graph.updatePipeLength(pipe1.id, 700);
+    expect(tee.ports[0].position.x).toBeCloseTo(prevTeeX + 200, 2);
+    expect(branchPipe.ports[1].position.x).toBeCloseTo(prevTeeX + (teeSpec.runTakeOff || 63.5) + 200, 2);
+
+    // 2. Rotar la Te 90° alrededor del eje +X -> el ramal que iba en +Z ahora debe ir en -Y (o +Y)
+    graph.rotateComponentAroundRun(tee.id, 90);
+    expect(Math.abs(branchPipe.ports[1].direction.y)).toBeCloseTo(1.0, 2);
+  });
+
+  it('Debe exportar e importar un archivo PCF reconstruyendo niples y accesorios', () => {
+    const graph = new PipingGraph('CS150', 2, 'SCH 40');
+    const pipeSpec = reader.findPipe(2, 'CS150')!;
+    const elbowSpec = reader.findElbow(2, 90, 'CS150')!;
+
+    graph.routeTurnWithElbow(
+      new THREE.Vector3(0, 0, 0),
+      new THREE.Vector3(1000, 0, 0),
+      new THREE.Vector3(1000, 1000, 0),
+      pipeSpec,
+      elbowSpec
+    );
+
+    const pcfText = PcfExporter.exportToPcf(graph, { pipelineReference: '100-CS150-2"' });
+    const imported = PcfImporter.importFromPcf(pcfText, reader, 'CS150');
+
+    expect(imported.pipeCount).toBe(2);
+    expect(imported.componentCount).toBe(3);
+    expect(imported.lineReference).toBe('100-CS150-2"');
   });
 });

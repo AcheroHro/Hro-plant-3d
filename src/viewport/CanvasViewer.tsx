@@ -583,12 +583,72 @@ export const CanvasViewer: React.FC = () => {
       portsGroup.add(stubArrow);
     }
 
-    // 3. Cursor de ruteo activo y previsualización fantasma (Dynamic Input de Plant 3D)
+    // 3. Compás 3D de AutoCAD Plant 3D + Previsualización de Tubo Fantasma 3D en el puerto activo
     const activePort = selectedPortId ? graph.ports.get(selectedPortId) : (openPorts.length > 0 ? openPorts[openPorts.length - 1] : null);
     if (activePort) {
-      // Línea fantasma proyectada con la longitud y dirección activa
+      const compassRadius = Math.max(95, activePort.outerDiameter * 1.45);
+      // Anillo del Compás 3D estilo AutoCAD Plant 3D (rojo carmesí/cyan con marcas cada 45° y 90°)
+      const compassRingGeom = new THREE.RingGeometry(compassRadius - 3.5, compassRadius, 48);
+      const compassRingMat = new THREE.MeshBasicMaterial({
+        color: 0xef4444,
+        side: THREE.DoubleSide,
+        transparent: true,
+        opacity: 0.85
+      });
+      const compassRing = new THREE.Mesh(compassRingGeom, compassRingMat);
+      compassRing.position.copy(activePort.position);
+      // Orientar el compás en el plano XY (o perpendicular a la dirección si es vertical)
+      if (Math.abs(activePort.direction.z) > 0.9) {
+        compassRing.rotation.set(0, 0, 0);
+      }
+      cursorGroup.add(compassRing);
+
+      // Marcas de graduación del compás (cada 45°)
+      const tickPoints: THREE.Vector3[] = [];
+      for (let deg = 0; deg < 360; deg += 45) {
+        const rad = THREE.MathUtils.degToRad(deg);
+        const rInner = deg % 90 === 0 ? compassRadius - 18 : compassRadius - 10;
+        const rOuter = compassRadius + 4;
+        tickPoints.push(
+          new THREE.Vector3(
+            activePort.position.x + Math.cos(rad) * rInner,
+            activePort.position.y + Math.sin(rad) * rInner,
+            activePort.position.z
+          ),
+          new THREE.Vector3(
+            activePort.position.x + Math.cos(rad) * rOuter,
+            activePort.position.y + Math.sin(rad) * rOuter,
+            activePort.position.z
+          )
+        );
+      }
+      const ticksGeom = new THREE.BufferGeometry().setFromPoints(tickPoints);
+      const ticksMat = new THREE.LineBasicMaterial({ color: 0xf87171 });
+      const ticksLines = new THREE.LineSegments(ticksGeom, ticksMat);
+      cursorGroup.add(ticksLines);
+
+      // Tubo fantasma 3D semitransparente con el diámetro real (OD) y largo proyectado
       const lenMm = parseFloat(numpadValue) || 500;
-      const previewEnd = activePort.position.clone().add(activeDirection.clone().multiplyScalar(lenMm));
+      const arrowDir = activeDirection.clone().normalize();
+      const previewEnd = activePort.position.clone().add(arrowDir.clone().multiplyScalar(lenMm));
+
+      const ghostRadius = (activePort.outerDiameter || 60.3) / 2;
+      const ghostCylGeom = new THREE.CylinderGeometry(ghostRadius, ghostRadius, lenMm, 20, 1, true);
+      ghostCylGeom.rotateX(Math.PI / 2); // Alinear eje del cilindro con +Z para usar setFromUnitVectors
+      ghostCylGeom.translate(0, 0, lenMm / 2);
+      const ghostCylMat = new THREE.MeshBasicMaterial({
+        color: 0x38bdf8,
+        transparent: true,
+        opacity: 0.24,
+        side: THREE.DoubleSide,
+        depthWrite: false
+      });
+      const ghostCyl = new THREE.Mesh(ghostCylGeom, ghostCylMat);
+      ghostCyl.position.copy(activePort.position);
+      ghostCyl.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), arrowDir);
+      cursorGroup.add(ghostCyl);
+
+      // Línea central punteada de eje a eje
       const lineGeom = new THREE.BufferGeometry().setFromPoints([activePort.position, previewEnd]);
       const lineMat = new THREE.LineDashedMaterial({
         color: 0x38bdf8,
@@ -600,7 +660,6 @@ export const CanvasViewer: React.FC = () => {
       cursorGroup.add(previewLine);
 
       // Flecha indicadora de dirección activa
-      const arrowDir = activeDirection.clone().normalize();
       const arrowHelper = new THREE.ArrowHelper(arrowDir, activePort.position, Math.min(260, lenMm), 0x22c55e, 52, 32);
       cursorGroup.add(arrowHelper);
     }
@@ -721,6 +780,11 @@ export const CanvasViewer: React.FC = () => {
               break;
             }
           }
+        }
+
+        // Si se tocó el espacio vacío del visor 3D, deseleccionar la pieza activa
+        if (!handled) {
+          setSelectedComponentId(null);
         }
       }
     }

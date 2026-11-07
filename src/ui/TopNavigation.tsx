@@ -1,5 +1,8 @@
 import React, { useRef } from 'react';
 import { usePipingStore } from '../store/usePipingStore';
+import { useUiConfigStore } from '../store/useUiConfigStore';
+import { PcfExporter } from '../core/exporters/PcfExporter';
+import { downloadFile } from '../utils/fileDownloader';
 
 const BUILT_IN_SPECS = ['RCI1', 'CS150', 'CS300', 'SS150'];
 
@@ -8,6 +11,9 @@ export const TopNavigation: React.FC = () => {
   const setCameraMode = usePipingStore((s) => s.setCameraMode);
   const nominalDiameter = usePipingStore((s) => s.nominalDiameter);
   const setNominalDiameter = usePipingStore((s) => s.setNominalDiameter);
+  const lineNumber = usePipingStore((s) => s.lineNumber);
+  const setLineNumber = usePipingStore((s) => s.setLineNumber);
+  const selectedComponentId = usePipingStore((s) => s.selectedComponentId);
   const canUndo = usePipingStore((s) => s.canUndo);
   const canRedo = usePipingStore((s) => s.canRedo);
   const undo = usePipingStore((s) => s.undo);
@@ -19,11 +25,18 @@ export const TopNavigation: React.FC = () => {
   const statusMessage = usePipingStore((s) => s.statusMessage);
   const specReader = usePipingStore((s) => s.specReader);
   const specCode = usePipingStore((s) => s.specCode);
+  const graph = usePipingStore((s) => s.graph);
   const loadPspcFile = usePipingStore((s) => s.loadPspcFile);
   const loadBuiltInSpec = usePipingStore((s) => s.loadBuiltInSpec);
-  const toggleToolPalette = usePipingStore((s) => s.toggleToolPalette);
+  const importPcfFile = usePipingStore((s) => s.importPcfFile);
+
+  const palettes = useUiConfigStore((s) => s.palettes);
+  const togglePaletteOpen = useUiConfigStore((s) => s.togglePaletteOpen);
+  const togglePaletteCollapsed = useUiConfigStore((s) => s.togglePaletteCollapsed);
+  const resetWorkspaceLayout = useUiConfigStore((s) => s.resetWorkspaceLayout);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const pcfInputRef = useRef<HTMLInputElement>(null);
 
   const availableDiameters = specReader
     ? specReader.getAvailableNominalDiameters(specCode)
@@ -41,12 +54,54 @@ export const TopNavigation: React.FC = () => {
     }
   };
 
+  const handlePropertiesRibbonClick = () => {
+    if (!palettes.properties.isOpen) {
+      togglePaletteOpen('properties', true);
+    }
+    if (!selectedComponentId) {
+      togglePaletteCollapsed('properties', true);
+      usePipingStore.setState({
+        statusMessage:
+          'Seleccione una pieza en el visor 3D y presione "Propiedades" para desplegar sus datos.'
+      });
+      return;
+    }
+    togglePaletteCollapsed('properties', !palettes.properties.isCollapsed);
+  };
+
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     const buffer = await file.arrayBuffer();
     await loadPspcFile(buffer, file.name);
     if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const handlePcfUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const content = await file.text();
+    importPcfFile(content, file.name);
+    if (pcfInputRef.current) pcfInputRef.current.value = '';
+  };
+
+  const handleQuickExportPcf = () => {
+    if (graph.components.size === 0) {
+      usePipingStore.setState({
+        statusMessage: 'No hay componentes en el modelo 3D para exportar a .PCF.'
+      });
+      return;
+    }
+    const refName = (lineNumber || `100-${specCode}-${nominalDiameter}"`).trim();
+    const safeFileName = refName.replace(/[^a-zA-Z0-9_-]/g, '_').toLowerCase();
+    const pcfContent = PcfExporter.exportToPcf(graph, {
+      pipelineReference: refName,
+      projectIdentifier: 'ACHERO_PLANT_3D'
+    });
+    downloadFile(`${safeFileName}_isogen.pcf`, pcfContent, 'text/plain');
+    usePipingStore.setState({
+      statusMessage: `Archivo PCF exportado: ${safeFileName}_isogen.pcf (${graph.components.size} piezas).`
+    });
   };
 
   const formatNd = (d: number) => {
@@ -63,63 +118,159 @@ export const TopNavigation: React.FC = () => {
     ? BUILT_IN_SPECS
     : [specCode, ...BUILT_IN_SPECS];
 
+  const isPropsUnfolded =
+    palettes.properties.isOpen && Boolean(selectedComponentId) && !palettes.properties.isCollapsed;
+
   return (
-    <header className="absolute top-0 left-0 right-0 z-30 flex flex-col bg-[#1e2128]/98 backdrop-blur-md border-b border-[#383d4a] shadow-xl select-none">
-      {/* Cinta superior de pestañas estilo AutoCAD Plant 3D 2027 */}
-      <div className="h-6 px-3 bg-[#15171c] border-b border-[#2c303a] flex items-center justify-between text-[10px]">
-        <div className="flex items-center space-x-3">
+    <header className="absolute top-0 left-0 right-0 z-30 flex flex-col bg-[#1b1f26]/98 backdrop-blur-md border-b border-[#343b48] shadow-xl select-none">
+      {/* Cinta superior de pestañas + Conmutadores de Paletas Flotantes */}
+      <div className="h-6 px-2.5 bg-[#13161b] border-b border-[#292e39] flex items-center justify-between text-[10px] overflow-x-auto no-scrollbar gap-2">
+        <div className="flex items-center space-x-2.5 shrink-0">
           <div className="flex items-center space-x-1.5">
-            <span className="inline-flex items-center justify-center w-4 h-4 rounded-sm bg-[#e53935] text-white font-black text-[9px] tracking-tighter shadow-sm">
+            <span className="inline-flex items-center justify-center w-4 h-4 rounded-sm bg-[#d93831] text-white font-black text-[9px] tracking-tighter shadow-sm">
               P3D
             </span>
             <span className="font-bold text-slate-200 tracking-wide">
-              Autodesk AutoCAD Plant 3D 2027 <span className="text-[#0696d7]">• Achero Mobile</span>
+              Achero Plant 3D <span className="text-[#0696d7] hidden sm:inline">• CAD Field</span>
             </span>
           </div>
-          <div className="hidden sm:flex items-center space-x-1 text-[10px]">
-            <span className="px-2 py-0.5 bg-[#262a33] text-[#38bdf8] font-bold rounded-t border-t border-x border-[#383d4a]">
-              Home (3D Piping)
+          <div className="hidden md:flex items-center space-x-1 text-[10px]">
+            <span className="px-2 py-0.5 bg-[#232832] text-[#38bdf8] font-bold rounded-t border-t border-x border-[#343b48]">
+              Home
             </span>
-            <span className="px-2 py-0.5 text-slate-400 hover:text-slate-200 cursor-pointer" onClick={toggleExport}>
-              Isos (IsoGen / DXF)
+            <span
+              className="px-2 py-0.5 text-slate-400 hover:text-slate-200 cursor-pointer"
+              onClick={toggleBom}
+            >
+              Lista de Cortes / BOM
             </span>
-            <span className="px-2 py-0.5 text-slate-400 hover:text-slate-200 cursor-pointer" onClick={toggleBom}>
-              Data Manager (BOM)
+            <span
+              className="px-2 py-0.5 text-slate-400 hover:text-slate-200 cursor-pointer"
+              onClick={toggleExport}
+            >
+              Isos (PCF / DXF)
             </span>
           </div>
         </div>
-        <div className="flex items-center space-x-2 font-mono text-[9px] text-slate-400">
-          <span className="text-emerald-400">● P3dJoint Auto</span>
-          <span className="hidden md:inline">| WCS Z-Up (mm)</span>
+
+        {/* Barra de Ventanas / Paletas Flotantes (Permite mostrar, ocultar o restaurar cualquier paleta) */}
+        <div className="flex items-center space-x-1 shrink-0 font-mono text-[9px]">
+          <span className="text-slate-500 hidden sm:inline mr-0.5">Paletas:</span>
+
+          <button
+            type="button"
+            onClick={() => togglePaletteOpen('tools')}
+            className={`px-1.5 py-0.5 rounded border transition-all ${
+              palettes.tools.isOpen
+                ? 'bg-[#232832] text-sky-300 border-[#38bdf8]/50 font-bold'
+                : 'bg-[#161920] text-slate-500 border-[#292e39] hover:text-slate-300'
+            }`}
+            title="Mostrar / Ocultar Paleta de Piezas"
+          >
+            🧰 Piezas
+          </button>
+
+          <button
+            type="button"
+            onClick={handlePropertiesRibbonClick}
+            className={`px-1.5 py-0.5 rounded border transition-all ${
+              isPropsUnfolded
+                ? 'bg-[#0696d7] text-white border-[#38bdf8] font-extrabold'
+                : palettes.properties.isOpen && selectedComponentId
+                ? 'bg-amber-500/20 text-amber-300 border-amber-500/60 font-bold'
+                : palettes.properties.isOpen
+                ? 'bg-[#232832] text-slate-300 border-[#38bdf8]/40'
+                : 'bg-[#161920] text-slate-500 border-[#292e39] hover:text-slate-300'
+            }`}
+            title="Desplegar / Plegar Paleta de Propiedades de la pieza seleccionada"
+          >
+            📋 Propiedades
+          </button>
+
+          <button
+            type="button"
+            onClick={() => togglePaletteOpen('compass')}
+            className={`px-1.5 py-0.5 rounded border transition-all ${
+              palettes.compass.isOpen
+                ? 'bg-[#232832] text-sky-300 border-[#38bdf8]/50 font-bold'
+                : 'bg-[#161920] text-slate-500 border-[#292e39] hover:text-slate-300'
+            }`}
+            title="Mostrar / Ocultar ViewCube 3D"
+          >
+            🧊 ViewCube
+          </button>
+
+          <button
+            type="button"
+            onClick={() => togglePaletteOpen('numpad')}
+            className={`px-1.5 py-0.5 rounded border transition-all ${
+              palettes.numpad.isOpen
+                ? 'bg-[#232832] text-sky-300 border-[#38bdf8]/50 font-bold'
+                : 'bg-[#161920] text-slate-500 border-[#292e39] hover:text-slate-300'
+            }`}
+            title="Mostrar / Ocultar Línea de Comando / Trazado"
+          >
+            ⌨ Comando
+          </button>
+
+          <button
+            type="button"
+            onClick={resetWorkspaceLayout}
+            className="px-1.5 py-0.5 rounded bg-[#1d222c] hover:bg-[#2b3240] text-amber-300 border border-[#343b48] font-bold"
+            title="Restaurar posición y visibilidad de todas las paletas"
+          >
+            ⊞ Reset Vista
+          </button>
         </div>
       </div>
 
-      {/* Ribbon Principal de Herramientas (Part Insertion & Visibility) */}
-      <div className="h-12 px-2.5 flex items-center justify-between gap-1.5 overflow-x-auto no-scrollbar bg-[#252830]">
-        {/* Input oculto para cargar archivos .pspc */}
+      {/* Ribbon Principal de Herramientas (Line Number + Spec + Size + Import/Export) */}
+      <div className="h-12 px-2.5 flex items-center justify-between gap-1.5 overflow-x-auto no-scrollbar bg-[#222731]">
+        {/* Inputs ocultos para cargar archivos .pspc y .pcf */}
         <input
           ref={fileInputRef}
           type="file"
-          accept=".pspc"
+          accept=".pspc,.dcf,.sqlite"
           onChange={handleFileUpload}
           className="hidden"
         />
+        <input
+          ref={pcfInputRef}
+          type="file"
+          accept=".pcf,.txt"
+          onChange={handlePcfUpload}
+          className="hidden"
+        />
 
-        {/* Grupo Ribbon: Part Insertion (Spec Selector + Size Selector + Tool Palette) */}
+        {/* Grupo Ribbon: Line Number + Spec Selector + Size Selector */}
         <div className="flex items-center space-x-1.5 shrink-0">
+          {/* Selector / Editor de Line Number (como Plant 3D Route Pipe) */}
+          <div className="flex flex-col bg-[#161920] border border-[#343b48] rounded px-1.5 py-0.5">
+            <span className="text-[7px] uppercase text-slate-400 font-bold leading-none mb-0.5">
+              Line Number
+            </span>
+            <input
+              type="text"
+              value={lineNumber}
+              onChange={(e) => setLineNumber(e.target.value)}
+              className="w-24 sm:w-28 bg-transparent text-[11px] font-mono font-bold text-amber-300 outline-none leading-tight"
+              title="Número de Línea (Line Number de AutoCAD Plant 3D)"
+            />
+          </div>
+
           {/* Selector de Spec Oficial (RCI1, CS150, CS300, SS150) */}
-          <div className="flex flex-col bg-[#1b1e24] border border-[#3a3f4d] rounded px-1.5 py-0.5">
-            <span className="text-[8px] uppercase text-slate-400 font-bold leading-none mb-0.5">
+          <div className="flex flex-col bg-[#161920] border border-[#343b48] rounded px-1.5 py-0.5">
+            <span className="text-[7px] uppercase text-slate-400 font-bold leading-none mb-0.5">
               Spec
             </span>
             <select
               value={specCode}
               onChange={(e) => loadBuiltInSpec(e.target.value)}
               className="bg-transparent text-[11px] font-mono font-bold text-[#38bdf8] outline-none cursor-pointer leading-tight"
-              title="Seleccionar Especificación de AutoCAD Plant 3D 2027"
+              title="Seleccionar Especificación de AutoCAD Plant 3D"
             >
               {specOptions.map((sp) => (
-                <option key={sp} value={sp} className="bg-[#1b1e24] text-slate-100">
+                <option key={sp} value={sp} className="bg-[#161920] text-slate-100">
                   {sp}
                 </option>
               ))}
@@ -127,8 +278,8 @@ export const TopNavigation: React.FC = () => {
           </div>
 
           {/* Selector de Diámetro Nominal (Size) */}
-          <div className="flex flex-col bg-[#1b1e24] border border-[#3a3f4d] rounded px-1.5 py-0.5">
-            <span className="text-[8px] uppercase text-slate-400 font-bold leading-none mb-0.5">
+          <div className="flex flex-col bg-[#161920] border border-[#343b48] rounded px-1.5 py-0.5">
+            <span className="text-[7px] uppercase text-slate-400 font-bold leading-none mb-0.5">
               Size (ND)
             </span>
             <select
@@ -138,75 +289,90 @@ export const TopNavigation: React.FC = () => {
               title="Seleccionar Diámetro Nominal (Size)"
             >
               {availableDiameters.map((d) => (
-                <option key={d} value={d} className="bg-[#1b1e24] text-slate-100">
+                <option key={d} value={d} className="bg-[#161920] text-slate-100">
                   {formatNd(d)}
                 </option>
               ))}
             </select>
           </div>
 
+          {/* Botón Primario en Ribbon: Desplegar Propiedades de la Pieza Seleccionada */}
+          <button
+            type="button"
+            onClick={handlePropertiesRibbonClick}
+            className={`h-9 px-2.5 rounded text-[11px] font-bold transition-all border flex items-center space-x-1 ${
+              isPropsUnfolded
+                ? 'bg-[#0696d7] text-white border-[#38bdf8] shadow-md shadow-[#0696d7]/30'
+                : selectedComponentId
+                ? 'bg-amber-500/20 text-amber-300 border-amber-400 hover:bg-amber-500/30 animate-pulse'
+                : 'bg-[#2b313d] text-slate-300 border-[#3e4656] hover:border-[#0696d7]'
+            }`}
+            title="Desplegar o plegar la Paleta de Propiedades de la pieza seleccionada"
+          >
+            <span>📋</span>
+            <span>Propiedades</span>
+          </button>
+
           {/* Botón Cargar otro .pspc */}
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
-            className="h-9 px-2 rounded bg-[#2f333d] border border-[#434959] hover:border-[#0696d7] text-[11px] font-bold text-slate-200 flex items-center space-x-1 transition-colors"
-            title="Importar otro archivo .pspc desde el dispositivo"
+            className="h-9 px-2 rounded bg-[#2b313d] border border-[#3e4656] hover:border-[#0696d7] text-[10px] font-mono font-bold text-slate-200 flex items-center space-x-1 transition-colors"
+            title="Importar especificación .pspc de AutoCAD Plant 3D"
           >
-            <span>📁</span>
-            <span className="hidden lg:inline">.PSPC</span>
+            <span>+SPEC</span>
           </button>
 
-          {/* Separador vertical tipo Ribbon */}
-          <div className="h-7 w-[1px] bg-[#3a3f4d] mx-0.5" />
+          {/* Botón Importar PCF desde la PC */}
+          <button
+            type="button"
+            onClick={() => pcfInputRef.current?.click()}
+            className="h-9 px-2 rounded bg-[#2b313d] border border-amber-500/60 hover:border-amber-400 text-[10px] font-mono font-bold text-amber-300 flex items-center space-x-1 transition-colors"
+            title="Abrir archivo Isométrico .PCF exportado desde AutoCAD Plant 3D o Achero Plant 3D"
+          >
+            <span>📂</span>
+            <span>ABRIR PCF</span>
+          </button>
 
-          {/* Selector de Modo: Route Pipe vs Orbit */}
+          {/* Botón Exportar PCF directo de la línea trazada en la App */}
+          <button
+            type="button"
+            onClick={handleQuickExportPcf}
+            disabled={graph.components.size === 0}
+            className="h-9 px-2.5 rounded bg-sky-600/25 border border-sky-400/70 hover:bg-sky-600/40 hover:border-sky-300 text-[10px] font-mono font-bold text-sky-200 flex items-center space-x-1 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            title="Exportar y descargar archivo .PCF estándar Isogen / AutoCAD Plant 3D del modelo actual"
+          >
+            <span>⬇</span>
+            <span>EXPORTAR PCF</span>
+          </button>
+
+          <div className="h-7 w-[1px] bg-[#343b48] mx-0.5" />
+
+          {/* Selector de Modo: Seguir Boca vs Órbita Libre */}
           <button
             type="button"
             onClick={handleModeToggle}
-            className={`h-9 px-2.5 rounded text-xs font-bold transition-all border flex items-center space-x-1.5 ${
+            className={`h-9 px-2.5 rounded text-[11px] font-bold transition-all border flex items-center space-x-1 ${
               cameraMode === 'ROUTE_MODE'
                 ? 'bg-[#0696d7] text-white border-[#38bdf8] shadow-md shadow-[#0696d7]/30'
-                : 'bg-[#2f333d] text-slate-200 border-[#434959] hover:bg-[#383d4a]'
+                : 'bg-[#2b313d] text-slate-200 border-[#3e4656] hover:bg-[#343b48]'
             }`}
-            title="Alternar entre Ruteo de Cañería (Route Pipe) y Órbita 3D"
+            title="En Route Pipe la cámara sigue automáticamente la boca activa"
           >
-            <span>{cameraMode === 'ROUTE_MODE' ? '🔧' : '🔄'}</span>
-            <span className="hidden sm:inline">
-              {cameraMode === 'ROUTE_MODE' ? 'Route Pipe' : 'Órbita 3D'}
-            </span>
-          </button>
-
-          {/* Botón Tool Palette (Paleta de Accesorios Plant 3D) */}
-          <button
-            type="button"
-            onClick={() => {
-              if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
-                try {
-                  navigator.vibrate(15);
-                } catch {
-                  // Ignorar
-                }
-              }
-              toggleToolPalette();
-            }}
-            className="h-9 px-2.5 rounded bg-[#2f333d] hover:bg-[#3a3f4d] border border-amber-500/60 text-amber-300 font-bold text-xs flex items-center space-x-1.5 active:scale-95 transition-all shadow-sm"
-            title="Abrir Tool Palette de Accesorios (Codos, Tes, Bridas, Válvulas)"
-          >
-            <span>🧰</span>
-            <span>Tool Palette</span>
+            <span>{cameraMode === 'ROUTE_MODE' ? 'Route Pipe' : 'Vista Libre'}</span>
           </button>
         </div>
 
-        {/* Grupo Derecho: Undo, Redo, Zoom Extents, Data Manager (BOM) e Iso/DXF */}
+        {/* Grupo Derecho: Undo, Redo, Zoom Extents, Lista de Cortes y Exportar Iso/DXF */}
         <div className="flex items-center space-x-1 shrink-0">
           <button
             type="button"
             onClick={undo}
             disabled={!canUndo}
-            className={`w-8 h-9 rounded border text-xs flex items-center justify-center transition-all ${
+            className={`w-8 h-9 rounded border text-xs font-bold flex items-center justify-center transition-all ${
               canUndo
-                ? 'bg-[#2f333d] border-[#434959] text-slate-100 hover:border-[#0696d7] active:bg-slate-700'
-                : 'bg-[#1b1e24] border-[#2c303a] text-slate-600 cursor-not-allowed'
+                ? 'bg-[#2b313d] border-[#3e4656] text-slate-100 hover:border-[#0696d7] active:bg-slate-700'
+                : 'bg-[#161920] border-[#262b35] text-slate-600 cursor-not-allowed'
             }`}
             title="Deshacer (UNDO)"
           >
@@ -217,10 +383,10 @@ export const TopNavigation: React.FC = () => {
             type="button"
             onClick={redo}
             disabled={!canRedo}
-            className={`w-8 h-9 rounded border text-xs flex items-center justify-center transition-all ${
+            className={`w-8 h-9 rounded border text-xs font-bold flex items-center justify-center transition-all ${
               canRedo
-                ? 'bg-[#2f333d] border-[#434959] text-slate-100 hover:border-[#0696d7] active:bg-slate-700'
-                : 'bg-[#1b1e24] border-[#2c303a] text-slate-600 cursor-not-allowed'
+                ? 'bg-[#2b313d] border-[#3e4656] text-slate-100 hover:border-[#0696d7] active:bg-slate-700'
+                : 'bg-[#161920] border-[#262b35] text-slate-600 cursor-not-allowed'
             }`}
             title="Rehacer (REDO)"
           >
@@ -230,37 +396,35 @@ export const TopNavigation: React.FC = () => {
           <button
             type="button"
             onClick={frameAll}
-            className="w-8 h-9 rounded bg-[#2f333d] border border-[#434959] text-xs font-bold text-slate-200 hover:border-[#0696d7] flex items-center justify-center"
+            className="px-2 h-9 rounded bg-[#2b313d] border border-[#3e4656] text-[10px] font-mono font-bold text-slate-200 hover:border-[#0696d7] flex items-center justify-center"
             title="Zoom Extents (Encuadrar Modelo)"
           >
-            ⛶
+            EXT
           </button>
 
           <button
             type="button"
             onClick={toggleBom}
-            className="h-9 px-2.5 rounded bg-[#2f333d] border border-[#434959] text-xs font-bold text-slate-100 hover:border-[#0696d7] flex items-center space-x-1"
-            title="Data Manager: Cómputo BOM, Juntas, Espárragos y Lista de Cortes"
+            className="h-9 px-2.5 rounded bg-emerald-600/20 border border-emerald-500/70 text-[11px] font-bold text-emerald-300 hover:bg-emerald-600/30 flex items-center space-x-1"
+            title="Ver Lista de Cortes de Niples (Nro, Largo mm, Extremos Plano/Bisel/Roscado) y BOM"
           >
-            <span>📋</span>
-            <span className="hidden sm:inline">BOM / Cortes</span>
+            <span>Lista de Cortes</span>
           </button>
 
           <button
             type="button"
             onClick={toggleExport}
-            className="h-9 px-2.5 rounded bg-[#0696d7]/20 border border-[#0696d7] text-xs font-bold text-[#38bdf8] hover:bg-[#0696d7]/30 flex items-center space-x-1 shadow-sm"
-            title="Production Iso: Exportar Plano Isométrico 2D (.DXF) e Isogen (.PCF)"
+            className="h-9 px-2.5 rounded bg-[#0696d7]/20 border border-[#0696d7] text-[11px] font-bold text-[#38bdf8] hover:bg-[#0696d7]/30 flex items-center space-x-1 shadow-sm"
+            title="Exportar Plano Isométrico 2D (.DXF) e Isogen (.PCF)"
           >
-            <span>📐</span>
-            <span className="hidden sm:inline">Iso / DXF</span>
+            <span>Iso / DXF</span>
           </button>
 
           <button
             type="button"
             onClick={resetGraph}
-            className="w-8 h-9 rounded bg-rose-950/40 border border-rose-800/50 text-rose-400 text-xs flex items-center justify-center hover:bg-rose-900/50"
-            title="Limpiar Modelo 3D"
+            className="w-8 h-9 rounded bg-rose-950/40 border border-rose-800/50 text-rose-400 text-xs font-bold flex items-center justify-center hover:bg-rose-900/50"
+            title="Reiniciar Línea 3D"
           >
             ↺
           </button>
@@ -269,13 +433,13 @@ export const TopNavigation: React.FC = () => {
 
       {/* Barra de Estado estilo Línea de Comando de AutoCAD Plant 3D */}
       {statusMessage && (
-        <div className="bg-[#181a20] px-3 py-1 text-[10px] text-slate-300 font-mono border-t border-[#2c303a] flex items-center justify-between truncate">
+        <div className="bg-[#14171d] px-3 py-1 text-[10px] text-slate-300 font-mono border-t border-[#282d38] flex items-center justify-between truncate">
           <div className="flex items-center space-x-1.5 truncate">
             <span className="text-[#0696d7] font-bold shrink-0">&gt;_</span>
             <span className="truncate">{statusMessage}</span>
           </div>
           <span className="text-[10px] font-mono text-amber-400 shrink-0 ml-2">
-            SPEC: {specCode} • ND: {formatNd(nominalDiameter)}
+            {lineNumber} • {specCode} • {formatNd(nominalDiameter)}
           </span>
         </div>
       )}

@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "prebuild": "node --input-type=commonjs -e \"const fs=require('fs');fs.mkdirSync('public',{recursive:true});['sql-wasm.wasm','sql-wasm-browser.wasm'].forEach(f=>{const p='node_modules/sql.js/dist/'+f;if(fs.existsSync(p))fs.copyFileSync(p,'public/'+f);});\"",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "test": "vitest run",

@@ -26,3 +26,28 @@ canvas {
   touch-action: none !important;
   outline: none;
 }
+
+/* Ocultar scrollbars en cintas horizontales */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Scrollbar técnico fino estilo CAD para paletas flotantes */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+::-webkit-scrollbar-track {
+  background: #14171f;
+}
+::-webkit-scrollbar-thumb {
+  background: #333c4d;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #0696d7;
+}

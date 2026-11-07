@@ -422,21 +422,37 @@ export class DxfExporter {
     );
     DxfExporter.addLine(lines, 'BOM_TABLE', start.x, currentY, start.x + tableWidth, currentY);
 
-    // Cabecera
-    DxfExporter.addText(lines, 'BOM_TABLE', start.x + colX[0] + 10, currentY - 40, 15, 0, 'MARCA');
+    // Cabecera: Identificación (N.º Niple), Diámetro, Largo (mm), Extremo 1, Extremo 2, Material
+    DxfExporter.addText(lines, 'BOM_TABLE', start.x + colX[0] + 10, currentY - 40, 15, 0, 'NRO NIPLE');
     DxfExporter.addText(lines, 'BOM_TABLE', start.x + colX[1] + 10, currentY - 40, 15, 0, 'DIAM');
-    DxfExporter.addText(lines, 'BOM_TABLE', start.x + colX[2] + 10, currentY - 40, 15, 0, 'SCHED');
+    DxfExporter.addText(lines, 'BOM_TABLE', start.x + colX[2] + 10, currentY - 40, 15, 0, 'LARGO (MM)');
     DxfExporter.addText(lines, 'BOM_TABLE', start.x + colX[3] + 10, currentY - 40, 15, 0, 'MATERIAL / SPEC');
-    DxfExporter.addText(lines, 'BOM_TABLE', start.x + colX[4] + 10, currentY - 40, 15, 0, 'EJE A EJE');
-    DxfExporter.addText(lines, 'BOM_TABLE', start.x + colX[5] + 10, currentY - 40, 15, 0, 'CORTE NETO');
+    DxfExporter.addText(lines, 'BOM_TABLE', start.x + colX[4] + 10, currentY - 40, 15, 0, 'EXTREMO 1');
+    DxfExporter.addText(lines, 'BOM_TABLE', start.x + colX[5] + 10, currentY - 40, 15, 0, 'EXTREMO 2');
 
     currentY -= rowHeight;
     DxfExporter.addLine(lines, 'BOM_TABLE', start.x, currentY, start.x + tableWidth, currentY);
 
     for (const cut of cutList) {
-      DxfExporter.addText(lines, 'BOM_TABLE', start.x + colX[0] + 15, currentY - 40, 15, 0, `C-${cut.itemNumber}`);
+      DxfExporter.addText(
+        lines,
+        'BOM_TABLE',
+        start.x + colX[0] + 10,
+        currentY - 40,
+        15,
+        0,
+        `${cut.nippleId} (C-${cut.itemNumber})`
+      );
       DxfExporter.addText(lines, 'BOM_TABLE', start.x + colX[1] + 10, currentY - 40, 15, 0, `${cut.nominalDiameter}"`);
-      DxfExporter.addText(lines, 'BOM_TABLE', start.x + colX[2] + 10, currentY - 40, 15, 0, cut.schedule);
+      DxfExporter.addText(
+        lines,
+        'BOM_TABLE',
+        start.x + colX[2] + 10,
+        currentY - 40,
+        16,
+        0,
+        `${Math.round(cut.cutLengthMm)} mm`
+      );
       DxfExporter.addText(
         lines,
         'BOM_TABLE',
@@ -453,16 +469,16 @@ export class DxfExporter {
         currentY - 40,
         15,
         0,
-        `${cut.grossLengthMm.toFixed(1)} mm`
+        cut.endFinish1.toUpperCase()
       );
       DxfExporter.addText(
         lines,
         'BOM_TABLE',
         start.x + colX[5] + 10,
         currentY - 40,
-        16,
+        15,
         0,
-        `${cut.cutLengthMm.toFixed(1)} mm`
+        cut.endFinish2.toUpperCase()
       );
 
       currentY -= rowHeight;

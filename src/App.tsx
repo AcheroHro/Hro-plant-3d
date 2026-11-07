@@ -8,6 +8,7 @@ import { ReticleCrosshair } from './ui/ReticleCrosshair';
 import { BomModal } from './ui/BomModal';
 import { ExportModal } from './ui/ExportModal';
 import { ToolPaletteModal } from './ui/ToolPaletteModal';
+import { QuickToolPalette } from './ui/QuickToolPalette';
 import { PropertiesInspector } from './ui/PropertiesInspector';
 
 export default function App() {
@@ -24,7 +25,7 @@ export default function App() {
       className="relative w-screen h-screen overflow-hidden bg-cad-dark select-none"
       style={{ touchAction: 'none' }}
     >
-      {/* Barra Ribbon superior estilo AutoCAD Plant 3D 2027 */}
+      {/* Barra Ribbon superior estilo AutoCAD Plant 3D 2027 + Conmutadores de Paletas */}
       <TopNavigation />
 
       {/* Viewport 3D Three.js táctil e interactivo */}
@@ -32,16 +33,19 @@ export default function App() {
         <CanvasViewer />
       </div>
 
-      {/* Paleta de Herramientas acoplada a la izquierda + Inspector de Piezas y Ramales de Te */}
+      {/* Paleta Flotante de Inserción Rápida de Piezas (Arrastrable, 1C/2C/Horizontal, Minimizable, Cerrable) */}
+      <QuickToolPalette />
+
+      {/* Paleta Flotante de Bocas Libres + Inspector de Propiedades Configurable */}
       <PropertiesInspector />
 
       {/* Retícula central de precisión y snapping */}
       <ReticleCrosshair />
 
-      {/* ViewCube 3D (TOP/FRONT/RIGHT/ISO) + Compás WCS */}
+      {/* Paleta Flotante ViewCube 3D (TOP/FRONT/RIGHT/ISO) + Compás WCS */}
       <TouchCompass />
 
-      {/* Barra inferior de Línea de Comandos + Dynamic Input estilo AutoCAD */}
+      {/* Paleta Flotante de Línea de Comandos + Dynamic Input estilo AutoCAD */}
       <TouchNumpad />
 
       {/* Modal de Catálogo Completo de Accesorios de Cañería */}

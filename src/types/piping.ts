@@ -20,6 +20,11 @@ export type ComponentType =
 export type EndType = 'BW' | 'SW' | 'THD' | 'FLANG';
 
 /**
+ * Preparación física de los extremos de cada niple para la Lista de Cortes de Taller
+ */
+export type NippleEndFinish = 'Bisel' | 'Plano' | 'Roscado';
+
+/**
  * Tipos de juntas entre componentes
  */
 export type JointType = 'BUTTWELD' | 'SOCKETWELD' | 'THREADED' | 'FLANGED' | 'GASKET';
@@ -113,6 +118,14 @@ export interface Component {
     boltSize?: string;
     boltCount?: number;
     boltLengthMm?: number;
+    /** Número de Línea (Line Number de AutoCAD Plant 3D, ej. "100-CS150-2\"") */
+    lineNumber?: string;
+    /** Identificación del niple para lista de cortes (ej. "N-01") */
+    nippleTag?: string;
+    /** Tipo de preparación del Extremo 1 del niple (Plano, Bisel, Roscado) */
+    endFinish1?: NippleEndFinish;
+    /** Tipo de preparación del Extremo 2 del niple (Plano, Bisel, Roscado) */
+    endFinish2?: NippleEndFinish;
   };
 }
 

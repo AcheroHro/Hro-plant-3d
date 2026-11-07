@@ -1,9 +1,9 @@
-import React, { useState } from 'react';
+import React from 'react';
 import * as THREE from 'three';
 import { usePipingStore } from '../store/usePipingStore';
+import { FloatingPalette } from './FloatingPalette';
 
 export const TouchCompass: React.FC = () => {
-  const [isCollapsed, setIsCollapsed] = useState(false);
   const activeDirection = usePipingStore((s) => s.activeDirection);
   const setActiveDirection = usePipingStore((s) => s.setActiveDirection);
   const setCameraViewPreset = usePipingStore((s) => s.setCameraViewPreset);
@@ -29,46 +29,27 @@ export const TouchCompass: React.FC = () => {
   };
 
   const getActiveLabel = () => {
-    if (isCurrent(1, 0, 0)) return '+X ESTE';
-    if (isCurrent(-1, 0, 0)) return '-X OESTE';
-    if (isCurrent(0, 1, 0)) return '+Y NORTE';
-    if (isCurrent(0, -1, 0)) return '-Y SUR';
-    if (isCurrent(0, 0, 1)) return '+Z ARRIBA';
-    if (isCurrent(0, 0, -1)) return '-Z ABAJO';
-    return `[${activeDirection.x.toFixed(1)}, ${activeDirection.y.toFixed(1)}, ${activeDirection.z.toFixed(1)}]`;
+    if (isCurrent(1, 0, 0)) return '+X';
+    if (isCurrent(-1, 0, 0)) return '-X';
+    if (isCurrent(0, 1, 0)) return '+Y';
+    if (isCurrent(0, -1, 0)) return '-Y';
+    if (isCurrent(0, 0, 1)) return '+Z';
+    if (isCurrent(0, 0, -1)) return '-Z';
+    return `[${activeDirection.x.toFixed(1)},${activeDirection.y.toFixed(1)}]`;
   };
 
-  if (isCollapsed) {
-    return (
-      <button
-        type="button"
-        onClick={() => setIsCollapsed(false)}
-        className="absolute top-20 right-2.5 z-20 px-2.5 py-1.5 rounded bg-[#1b1f26]/95 backdrop-blur-md border border-[#3a3f4d] shadow-xl flex items-center space-x-1.5 text-[11px] font-bold text-slate-200 active:scale-95 transition-all"
-        title="Abrir ViewCube / Compás 3D"
-      >
-        <span>🧊</span>
-        <span className="text-[#38bdf8] font-mono font-black">{getActiveLabel()}</span>
-        <span className="text-[9px] text-slate-400">▼</span>
-      </button>
-    );
-  }
-
   return (
-    <div className="absolute top-20 right-2.5 z-20 flex flex-col items-center bg-[#1b1f26]/95 backdrop-blur-md p-2 rounded-lg border border-[#343b48] shadow-2xl transition-all w-36">
-      <div className="w-full flex items-center justify-between mb-1 px-0.5">
-        <span className="text-[9px] font-bold text-[#38bdf8] uppercase tracking-wider font-mono">
-          🧊 ViewCube 3D
+    <FloatingPalette
+      paletteId="compass"
+      title="ViewCube"
+      icon="🧊"
+      badge={
+        <span className="px-1.5 py-0.2 rounded bg-[#0696d7]/20 border border-[#38bdf8]/40 text-[#38bdf8] font-mono font-black text-[9px]">
+          {getActiveLabel()}
         </span>
-        <button
-          type="button"
-          onClick={() => setIsCollapsed(true)}
-          className="w-4 h-4 flex items-center justify-center rounded bg-[#2a2f3a] text-slate-400 hover:text-white text-[10px] font-bold"
-          title="Minimizar ViewCube"
-        >
-          ✕
-        </button>
-      </div>
-
+      }
+      bodyClassName="p-2 flex flex-col items-center w-36"
+    >
       {/* Vistas de Cámara Estilo AutoCAD ViewCube (TOP / FRONT / RIGHT / ISO) */}
       <div className="grid grid-cols-4 gap-1 w-full mb-1.5 pb-1.5 border-b border-[#2e3440]">
         {(['TOP', 'FRONT', 'RIGHT', 'ISO'] as const).map((view) => (
@@ -229,6 +210,6 @@ export const TouchCompass: React.FC = () => {
           <span>-Z</span>
         </button>
       </div>
-    </div>
+    </FloatingPalette>
   );
 };

@@ -10,7 +10,8 @@ import {
   SerializedComponent,
   SerializedJoint,
   SerializedPort,
-  ElbowPlacementResult
+  ElbowPlacementResult,
+  NippleEndFinish
 } from '../../types/piping';
 import { calculateElbowPlacement, validateOpposedPorts, EPSILON } from '../math/elbowSolver';
 
@@ -32,6 +33,7 @@ export class PipingGraph {
   public activeSpec: string = 'CS150';
   public currentNominalDiameter: number = 2;
   public currentSchedule: string = 'SCH 40';
+  public activeLineNumber: string = '100-CS150-2"';
 
   private undoStack: GraphCommand[] = [];
   private redoStack: GraphCommand[] = [];
@@ -583,7 +585,137 @@ export class PipingGraph {
   }
 
   /**
-   * Rota el ramal de una Te (TEE) o la salida de un Codo (ELBOW) alrededor de su eje de entrada
+   * Obtiene mediante búsqueda en anchura (BFS) todos los componentes y juntas conectados
+   * aguas abajo a partir de un puerto de salida, sin retroceder hacia blockedComponentId.
+   */
+  public getDownstreamSubgraph(
+    startPortId: string,
+    blockedComponentId: string
+  ): { componentIds: Set<string>; jointIds: Set<string> } {
+    const componentIds = new Set<string>();
+    const jointIds = new Set<string>();
+    const startPort = this.ports.get(startPortId);
+    if (!startPort || !startPort.connectedJointId) {
+      return { componentIds, jointIds };
+    }
+
+    const queue: string[] = [startPort.connectedJointId];
+    while (queue.length > 0) {
+      const jId = queue.shift()!;
+      if (jointIds.has(jId)) continue;
+      const joint = this.joints.get(jId);
+      if (!joint) continue;
+      jointIds.add(jId);
+
+      for (const pId of [joint.portAId, joint.portBId]) {
+        const p = this.ports.get(pId);
+        if (!p || p.componentId === blockedComponentId) continue;
+        if (!componentIds.has(p.componentId)) {
+          componentIds.add(p.componentId);
+          const comp = this.components.get(p.componentId);
+          if (comp) {
+            for (const otherPort of comp.ports) {
+              if (otherPort.connectedJointId && !jointIds.has(otherPort.connectedJointId)) {
+                queue.push(otherPort.connectedJointId);
+              }
+            }
+          }
+        }
+      }
+    }
+
+    return { componentIds, jointIds };
+  }
+
+  /**
+   * Traslada rígidamente todo el subgrafo conectado aguas abajo de un puerto en un vector delta (como AutoCAD Plant 3D)
+   */
+  public translateDownstream(startPortId: string, blockedComponentId: string, delta: THREE.Vector3): void {
+    if (delta.lengthSq() < 1e-8) return;
+    const { componentIds, jointIds } = this.getDownstreamSubgraph(startPortId, blockedComponentId);
+
+    for (const compId of componentIds) {
+      const comp = this.components.get(compId);
+      if (!comp) continue;
+      for (const p of comp.ports) {
+        p.position.add(delta);
+      }
+      for (const pt of comp.centerline) {
+        pt.add(delta);
+      }
+      if (comp.parameters.matrixElements && comp.parameters.matrixElements.length === 16) {
+        const mat = new THREE.Matrix4().fromArray(comp.parameters.matrixElements);
+        const pos = new THREE.Vector3();
+        const quat = new THREE.Quaternion();
+        const scl = new THREE.Vector3();
+        mat.decompose(pos, quat, scl);
+        pos.add(delta);
+        mat.compose(pos, quat, scl);
+        comp.parameters.matrixElements = Array.from(mat.elements);
+      }
+    }
+
+    for (const jId of jointIds) {
+      const joint = this.joints.get(jId);
+      if (joint) {
+        joint.position.add(delta);
+      }
+    }
+  }
+
+  /**
+   * Rota rígidamente todo el subgrafo conectado aguas abajo de un puerto alrededor de un eje (pivot, axis, angleRad)
+   */
+  public rotateDownstream(
+    startPortId: string,
+    blockedComponentId: string,
+    pivot: THREE.Vector3,
+    axis: THREE.Vector3,
+    angleRad: number
+  ): void {
+    if (Math.abs(angleRad) < 1e-8) return;
+    const { componentIds, jointIds } = this.getDownstreamSubgraph(startPortId, blockedComponentId);
+    const normAxis = axis.clone().normalize();
+    const rotQuat = new THREE.Quaternion().setFromAxisAngle(normAxis, angleRad);
+
+    const rotatePoint = (pt: THREE.Vector3) => {
+      pt.sub(pivot).applyAxisAngle(normAxis, angleRad).add(pivot);
+    };
+
+    for (const compId of componentIds) {
+      const comp = this.components.get(compId);
+      if (!comp) continue;
+      for (const p of comp.ports) {
+        rotatePoint(p.position);
+        p.direction.applyAxisAngle(normAxis, angleRad).normalize();
+      }
+      for (const pt of comp.centerline) {
+        rotatePoint(pt);
+      }
+      if (comp.parameters.matrixElements && comp.parameters.matrixElements.length === 16) {
+        const mat = new THREE.Matrix4().fromArray(comp.parameters.matrixElements);
+        const pos = new THREE.Vector3();
+        const quat = new THREE.Quaternion();
+        const scl = new THREE.Vector3();
+        mat.decompose(pos, quat, scl);
+        rotatePoint(pos);
+        quat.premultiply(rotQuat);
+        mat.compose(pos, quat, scl);
+        comp.parameters.matrixElements = Array.from(mat.elements);
+      }
+    }
+
+    for (const jId of jointIds) {
+      const joint = this.joints.get(jId);
+      if (joint) {
+        rotatePoint(joint.position);
+      }
+    }
+  }
+
+  /**
+   * Rota el ramal de una Te (TEE) o la salida de un Codo (ELBOW) alrededor de su eje de entrada,
+   * arrastrando automáticamente toda la línea o derivación conectada aguas abajo.
    */
   public rotateComponentAroundRun(componentId: string, angleDeg: number = 90): Component | null {
     const comp = this.components.get(componentId);
@@ -593,12 +725,14 @@ export class PipingGraph {
 
     if (comp.type === 'TEE' && comp.ports.length >= 3 && comp.centerline.length >= 4) {
       const portBranch = comp.ports[2];
-      if (portBranch.connectedJointId) {
-        throw new Error('No se puede girar el ramal de la Te porque ya tiene una cañería conectada.');
-      }
       const uRun = comp.ports[1].direction.clone().normalize();
       const vertex = comp.centerline[1].clone();
       const M = comp.parameters.branchTakeOff || vertex.distanceTo(portBranch.position) || 63.5;
+
+      // Si el ramal tiene piezas conectadas, rotar todo el subgrafo del ramal alrededor de (vertex, uRun)
+      if (portBranch.connectedJointId) {
+        this.rotateDownstream(portBranch.id, comp.id, vertex, uRun, rad);
+      }
 
       const newBranchDir = portBranch.direction.clone().applyAxisAngle(uRun, rad).normalize();
       const newP3 = vertex.clone().add(newBranchDir.clone().multiplyScalar(M));
@@ -611,13 +745,15 @@ export class PipingGraph {
 
     if (comp.type === 'ELBOW' && comp.ports.length >= 2) {
       const portOut = comp.ports[1];
-      if (portOut.connectedJointId) {
-        throw new Error('No se puede girar el codo porque su salida ya está conectada.');
-      }
       const p1 = comp.ports[0].position.clone();
       const uIn = comp.ports[0].direction.clone().negate().normalize();
       const takeOff = comp.parameters.takeOff || comp.parameters.radius || 76.2;
       const vertex = p1.clone().add(uIn.clone().multiplyScalar(takeOff));
+
+      if (portOut.connectedJointId) {
+        this.rotateDownstream(portOut.id, comp.id, vertex, uIn, rad);
+      }
+
       const newUOut = portOut.direction.clone().applyAxisAngle(uIn, rad).normalize();
       const pStart = p1.clone().sub(uIn.clone().multiplyScalar(takeOff));
       const pNext = vertex.clone().add(newUOut.clone().multiplyScalar(takeOff * 2));
@@ -634,7 +770,8 @@ export class PipingGraph {
   }
 
   /**
-   * Modifica la longitud de un tramo de caño existente (PIPE) si tiene al menos un extremo libre
+   * Modifica la longitud de un tramo de caño existente (PIPE) y propaga el desplazamiento
+   * a todos los accesorios y cañerías conectados aguas abajo (como AutoCAD Plant 3D).
    */
   public updatePipeLength(componentId: string, newLengthMm: number): Component | null {
     const comp = this.components.get(componentId);
@@ -643,29 +780,164 @@ export class PipingGraph {
     const port1 = comp.ports[0];
     const port2 = comp.ports[1];
 
-    if (!port2.connectedJointId) {
-      // Extremo 2 libre: mover puerto 2 a lo largo de la dirección del caño
-      const dir = port2.direction.clone().normalize();
-      const newEnd = port1.position.clone().add(dir.multiplyScalar(newLengthMm));
-      port2.position.copy(newEnd);
-      comp.centerline[1].copy(newEnd);
-      comp.parameters.cutLength = newLengthMm;
-      comp.parameters.grossLength = newLengthMm;
-      return comp;
-    } else if (!port1.connectedJointId) {
-      // Extremo 1 libre: mover puerto 1
-      const dir = port1.direction.clone().normalize();
-      const newStart = port2.position.clone().add(dir.multiplyScalar(newLengthMm));
-      port1.position.copy(newStart);
-      comp.centerline[0].copy(newStart);
-      comp.parameters.cutLength = newLengthMm;
-      comp.parameters.grossLength = newLengthMm;
-      return comp;
-    } else {
-      // Ambos extremos conectados: actualizar longitud declarada de corte
-      comp.parameters.cutLength = newLengthMm;
-      return comp;
+    const dir = port2.direction.clone().normalize();
+    const oldEnd = port2.position.clone();
+    const newEnd = port1.position.clone().add(dir.multiplyScalar(newLengthMm));
+    const delta = new THREE.Vector3().subVectors(newEnd, oldEnd);
+
+    if (port2.connectedJointId) {
+      this.translateDownstream(port2.id, comp.id, delta);
     }
+
+    port2.position.copy(newEnd);
+    comp.centerline[1].copy(newEnd);
+    comp.parameters.cutLength = newLengthMm;
+    comp.parameters.grossLength = newLengthMm;
+    return comp;
+  }
+
+  /**
+   * Actualiza los tipos de preparación de extremos (Plano, Bisel, Roscado) de un niple
+   */
+  public updatePipeEndFinishes(
+    componentId: string,
+    endFinish1: NippleEndFinish,
+    endFinish2: NippleEndFinish
+  ): Component | null {
+    const comp = this.components.get(componentId);
+    if (!comp || comp.type !== 'PIPE') return null;
+    comp.parameters.endFinish1 = endFinish1;
+    comp.parameters.endFinish2 = endFinish2;
+    return comp;
+  }
+
+  /**
+   * Actualiza metadatos de identificación de un componente (nippleTag, lineNumber, description)
+   */
+  public updateComponentMetadata(
+    componentId: string,
+    metadata: { nippleTag?: string; lineNumber?: string; description?: string }
+  ): Component | null {
+    const comp = this.components.get(componentId);
+    if (!comp) return null;
+    if (metadata.nippleTag !== undefined) {
+      comp.parameters.nippleTag = metadata.nippleTag.trim() || undefined;
+    }
+    if (metadata.lineNumber !== undefined) {
+      comp.parameters.lineNumber = metadata.lineNumber.trim() || undefined;
+    }
+    if (metadata.description !== undefined) {
+      comp.parameters.description = metadata.description;
+    }
+    return comp;
+  }
+
+  /**
+   * Parte un caño existente en dos niples e inserta un accesorio en línea (TEE, VALVE, FLANGE)
+   * descontando automáticamente los take-offs / face-to-face y reconectando las juntas (como AutoCAD Plant 3D).
+   */
+  public splitPipeWithFitting(
+    pipeId: string,
+    fittingSpec: SpecFitting,
+    pipeSpec: SpecFitting,
+    options?: {
+      offsetMm?: number;
+      branchDir?: THREE.Vector3;
+      gasketSpec?: SpecFitting | null;
+      boltSetSpec?: SpecFitting | null;
+    }
+  ): { pipe1: Component; fitting: Component; pipe2: Component } | null {
+    const origPipe = this.components.get(pipeId);
+    if (!origPipe || origPipe.type !== 'PIPE' || origPipe.ports.length < 2) return null;
+
+    const pStart = origPipe.ports[0].position.clone();
+    const pEnd = origPipe.ports[1].position.clone();
+    const totalLen = pStart.distanceTo(pEnd);
+    const uRun = new THREE.Vector3().subVectors(pEnd, pStart).normalize();
+
+    let halfSpan1 = 0;
+    let halfSpan2 = 0;
+    if (fittingSpec.partType === 'TEE') {
+      const C = fittingSpec.runTakeOff || 63.5;
+      halfSpan1 = C;
+      halfSpan2 = C;
+    } else {
+      const L = fittingSpec.faceToFace || 100;
+      halfSpan1 = L / 2;
+      halfSpan2 = L / 2;
+    }
+
+    const minNipple = 50;
+    if (totalLen < halfSpan1 + halfSpan2 + minNipple * 2) {
+      throw new Error(
+        `El caño (${Math.round(totalLen)} mm) es demasiado corto para insertar ${fittingSpec.partType} y dejar dos niples mínimos de ${minNipple} mm.`
+      );
+    }
+
+    const defaultCenter = totalLen / 2;
+    const centerDist = THREE.MathUtils.clamp(
+      options?.offsetMm !== undefined ? options.offsetMm : defaultCenter,
+      halfSpan1 + minNipple,
+      totalLen - halfSpan2 - minNipple
+    );
+
+    const cut1 = pStart.clone().add(uRun.clone().multiplyScalar(centerDist - halfSpan1));
+    const cut2 = pStart.clone().add(uRun.clone().multiplyScalar(centerDist + halfSpan2));
+
+    // Recordar conexiones previas en los extremos del caño original
+    let upstreamOtherPortId: string | null = null;
+    let upstreamJointType: JointType = 'BUTTWELD';
+    if (origPipe.ports[0].connectedJointId) {
+      const j0 = this.joints.get(origPipe.ports[0].connectedJointId);
+      if (j0) {
+        upstreamOtherPortId = j0.portAId === origPipe.ports[0].id ? j0.portBId : j0.portAId;
+        upstreamJointType = j0.type;
+      }
+    }
+
+    let downstreamOtherPortId: string | null = null;
+    let downstreamJointType: JointType = 'BUTTWELD';
+    if (origPipe.ports[1].connectedJointId) {
+      const j1 = this.joints.get(origPipe.ports[1].connectedJointId);
+      if (j1) {
+        downstreamOtherPortId = j1.portAId === origPipe.ports[1].id ? j1.portBId : j1.portAId;
+        downstreamJointType = j1.type;
+      }
+    }
+
+    // Eliminar caño original
+    this.removeComponent(origPipe.id);
+
+    // 1. Crear Niple 1 (desde pStart hasta cut1)
+    const pipe1 = this.addPipe(pStart, cut1, pipeSpec, pStart.distanceTo(cut1));
+    if (upstreamOtherPortId) {
+      this.connectPorts(upstreamOtherPortId, pipe1.ports[0].id, upstreamJointType);
+    }
+
+    // 2. Insertar el accesorio en el puerto de salida de pipe1
+    let fitting: Component;
+    if (fittingSpec.partType === 'TEE') {
+      const bDir =
+        options?.branchDir ||
+        (Math.abs(uRun.z) < 0.8 ? new THREE.Vector3(0, 0, 1) : new THREE.Vector3(0, 1, 0));
+      fitting = this.addTee(pipe1.ports[1], bDir, fittingSpec);
+    } else if (fittingSpec.partType === 'VALVE') {
+      fitting = this.addValve(pipe1.ports[1], fittingSpec, options?.gasketSpec, options?.boltSetSpec);
+    } else {
+      fitting = this.addFlange(pipe1.ports[1], fittingSpec, options?.gasketSpec, options?.boltSetSpec);
+    }
+
+    // 3. Crear Niple 2 (desde cut2 hasta pEnd) y conectarlo a la salida del accesorio
+    const pipe2 = this.addPipe(cut2, pEnd, pipeSpec, cut2.distanceTo(pEnd));
+    const fitOutPort = fitting.ports[1];
+    const jointTypeOut: JointType = fitOutPort.endType === 'FLANG' ? 'FLANGED' : 'BUTTWELD';
+    this.connectPorts(fitOutPort.id, pipe2.ports[0].id, jointTypeOut);
+
+    if (downstreamOtherPortId) {
+      this.connectPorts(pipe2.ports[1].id, downstreamOtherPortId, downstreamJointType);
+    }
+
+    return { pipe1, fitting, pipe2 };
   }
 
   /**
@@ -873,27 +1145,56 @@ export class PipingGraph {
   }
 
   /**
-   * Calcula el listado individual de cortes de cañería (Pipe Cut List / Spool List)
+   * Determina la preparación física de un extremo de niple (Plano, Bisel, Roscado)
+   * según la junta/accesorio conectado o la selección manual del usuario.
+   */
+  public resolvePortEndFinish(port?: Port, customOverride?: NippleEndFinish): NippleEndFinish {
+    if (customOverride) return customOverride;
+    if (!port) return 'Plano';
+    if (port.endType === 'THD') return 'Roscado';
+    if (port.endType === 'SW') return 'Plano';
+    if (port.connectedJointId) {
+      const joint = this.joints.get(port.connectedJointId);
+      if (joint) {
+        if (joint.type === 'THREADED') return 'Roscado';
+        if (joint.type === 'SOCKETWELD') return 'Plano';
+        if (joint.type === 'BUTTWELD') return 'Bisel';
+      }
+    }
+    return port.connectedJointId ? 'Bisel' : 'Plano';
+  }
+
+  /**
+   * Calcula el listado individual de cortes de cañería (Lista de Cortes de Niples / Spool List)
+   * Incluye Identificación (N-01, N-02...), Largo en mm y los dos Tipos de Extremos (Plano, Bisel, Roscado).
    */
   public calculatePipeCutList(): {
     itemNumber: number;
+    nippleId: string;
     componentId: string;
+    lineNumber: string;
     nominalDiameter: number;
     outerDiameter: number;
     schedule: string;
     description: string;
     grossLengthMm: number;
     cutLengthMm: number;
+    endFinish1: NippleEndFinish;
+    endFinish2: NippleEndFinish;
   }[] {
     const cuts: {
       itemNumber: number;
+      nippleId: string;
       componentId: string;
+      lineNumber: string;
       nominalDiameter: number;
       outerDiameter: number;
       schedule: string;
       description: string;
       grossLengthMm: number;
       cutLengthMm: number;
+      endFinish1: NippleEndFinish;
+      endFinish2: NippleEndFinish;
     }[] = [];
 
     let idx = 1;
@@ -903,15 +1204,24 @@ export class PipingGraph {
           comp.parameters.grossLength ||
           (comp.centerline.length >= 2 ? comp.centerline[0].distanceTo(comp.centerline[1]) : 0);
         const net = comp.parameters.cutLength !== undefined ? comp.parameters.cutLength : gross;
+        const num = idx++;
+        const nippleId = comp.parameters.nippleTag || `N-${String(num).padStart(2, '0')}`;
+        const endFinish1 = this.resolvePortEndFinish(comp.ports[0], comp.parameters.endFinish1);
+        const endFinish2 = this.resolvePortEndFinish(comp.ports[1], comp.parameters.endFinish2);
+
         cuts.push({
-          itemNumber: idx++,
+          itemNumber: num,
+          nippleId,
           componentId: comp.id,
+          lineNumber: comp.parameters.lineNumber || this.activeLineNumber || `${this.activeSpec}-${comp.parameters.nominalDiameter}"`,
           nominalDiameter: comp.parameters.nominalDiameter,
           outerDiameter: comp.parameters.outerDiameter,
           schedule: comp.parameters.schedule || 'SCH 40',
           description: comp.parameters.description || `PIPE ND ${comp.parameters.nominalDiameter}"`,
           grossLengthMm: gross,
-          cutLengthMm: net
+          cutLengthMm: net,
+          endFinish1,
+          endFinish2
         });
       }
     }

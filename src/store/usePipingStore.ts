@@ -5,7 +5,8 @@ import { SpecDatabaseReader } from '../core/specs/SpecDatabaseReader';
 import { saveGraphToIndexedDb, loadGraphFromIndexedDb, clearGraphIndexedDb } from '../persistence/indexedDbStorage';
 import { detectPipingCollisions } from '../viewport/collision/collisionDetector';
 import { calculateElbowPlacement } from '../core/math/elbowSolver';
-import { SerializedGraphState, ComponentType } from '../types/piping';
+import { SerializedGraphState, ComponentType, NippleEndFinish } from '../types/piping';
+import { PcfImporter } from '../core/importers/PcfImporter';
 
 export type CameraMode = 'INSPECT_MODE' | 'ROUTE_MODE';
 
@@ -17,6 +18,7 @@ export interface PipingState {
   nominalDiameter: number;
   schedule: string;
   specCode: string;
+  lineNumber: string;
   numpadValue: string;
   selectedPortId: string | null;
   selectedComponentId: string | null;
@@ -38,6 +40,7 @@ export interface PipingState {
   setCameraViewPreset: (preset: 'ISO' | 'TOP' | 'FRONT' | 'RIGHT') => void;
   setActiveDirection: (dir: THREE.Vector3) => void;
   setNominalDiameter: (nd: number) => void;
+  setLineNumber: (tag: string) => void;
   appendNumpadDigit: (digit: string) => void;
   backspaceNumpad: () => void;
   quickAddNumpad: (amount: number) => void;
@@ -48,6 +51,16 @@ export interface PipingState {
   cycleOpenPort: () => void;
   rotateSelectedComponent: (angleDeg?: number) => void;
   updateSelectedPipeLength: (newLengthMm: number) => void;
+  updatePipeEndFinishes: (componentId: string, endFinish1: NippleEndFinish, endFinish2: NippleEndFinish) => void;
+  updateComponentMetadata: (
+    componentId: string,
+    metadata: { nippleTag?: string; lineNumber?: string; description?: string }
+  ) => void;
+  splitSelectedPipeWithFitting: (
+    fittingType: 'TEE' | 'VALVE' | 'FLANGE',
+    offsetMm?: number,
+    branchDir?: THREE.Vector3
+  ) => void;
   deleteSelectedComponent: () => void;
   setNumpadValue: (val: string) => void;
   setSnappedPortId: (portId: string | null) => void;
@@ -65,6 +78,7 @@ export interface PipingState {
   resetGraph: () => Promise<void>;
   loadPspcFile: (buffer: ArrayBuffer, fileName: string) => Promise<void>;
   loadBuiltInSpec: (specName: string) => Promise<void>;
+  importPcfFile: (content: string, fileName: string) => void;
 }
 
 export const usePipingStore = create<PipingState>((set, get) => {
@@ -88,6 +102,7 @@ export const usePipingStore = create<PipingState>((set, get) => {
     nominalDiameter: 2,
     schedule: 'SCH 40',
     specCode: 'CS150',
+    lineNumber: '100-CS150-2"',
     numpadValue: '1000', // 1000 mm de longitud inicial
     selectedPortId: null,
     selectedComponentId: null,
@@ -180,12 +195,18 @@ export const usePipingStore = create<PipingState>((set, get) => {
     loadBuiltInSpec: async (targetSpecName: string) => {
       try {
         const fileName = `${targetSpecName}.pspc`;
-        const resp = await fetch(`/${fileName}`);
-        if (!resp.ok) {
-          throw new Error(`No se encontró /${fileName}`);
+        let reader: SpecDatabaseReader;
+        try {
+          const resp = await fetch(`/${fileName}`);
+          if (resp.ok) {
+            const buffer = await resp.arrayBuffer();
+            reader = await SpecDatabaseReader.fromBuffer(buffer, targetSpecName);
+          } else {
+            reader = await SpecDatabaseReader.createDefault(targetSpecName);
+          }
+        } catch {
+          reader = await SpecDatabaseReader.createDefault(targetSpecName);
         }
-        const buffer = await resp.arrayBuffer();
-        const reader = await SpecDatabaseReader.fromBuffer(buffer, targetSpecName);
         const available = reader.getAvailableNominalDiameters(targetSpecName);
         const newND = available.includes(get().nominalDiameter)
           ? get().nominalDiameter
@@ -201,7 +222,7 @@ export const usePipingStore = create<PipingState>((set, get) => {
           specCode: targetSpecName,
           nominalDiameter: newND,
           version: get().version + 1,
-          statusMessage: `COMMAND: PLANTSPECSET • Spec oficial AutoCAD Plant 3D 2027 '${targetSpecName}' activada (${available.length} ND).`
+          statusMessage: `COMMAND: PLANTSPECSET • Spec AutoCAD Plant 3D '${targetSpecName}' activada (${available.length} ND).`
         });
       } catch (err) {
         console.error('Error cargando spec integrada:', err);
@@ -401,8 +422,133 @@ export const usePipingStore = create<PipingState>((set, get) => {
       set({
         collidingComponentIds: collisions.collidingComponentIds,
         version: get().version + 1,
-        statusMessage: `Longitud de cañería actualizada a ${newLengthMm.toFixed(1)} mm.`
+        statusMessage: `Longitud de niple actualizada a ${newLengthMm.toFixed(0)} mm (línea aguas abajo desplazada).`
       });
+    },
+
+    updatePipeEndFinishes: (componentId, endFinish1, endFinish2) => {
+      const { graph } = get();
+      pushUndoSnapshot();
+      const updated = graph.updatePipeEndFinishes(componentId, endFinish1, endFinish2);
+      if (!updated) return;
+      saveGraphToIndexedDb(graph.serialize());
+      set({
+        version: get().version + 1,
+        statusMessage: `Extremos del niple actualizados: [${endFinish1} / ${endFinish2}].`
+      });
+    },
+
+    updateComponentMetadata: (componentId, metadata) => {
+      const { graph } = get();
+      pushUndoSnapshot();
+      const updated = graph.updateComponentMetadata(componentId, metadata);
+      if (!updated) return;
+      saveGraphToIndexedDb(graph.serialize());
+      set({
+        version: get().version + 1,
+        statusMessage: `Propiedades de pieza actualizadas (${updated.type} • ${
+          metadata.nippleTag || metadata.lineNumber || updated.id
+        }).`
+      });
+    },
+
+    splitSelectedPipeWithFitting: (fittingType, offsetMm, branchDir) => {
+      const { graph, specReader, selectedComponentId, specCode, activeDirection } = get();
+      if (!specReader || !selectedComponentId) {
+        set({ statusMessage: 'Seleccione primero un tramo de cañería (PIPE) en 3D para partirlo.' });
+        return;
+      }
+      const pipeComp = graph.components.get(selectedComponentId);
+      if (!pipeComp || pipeComp.type !== 'PIPE') {
+        set({ statusMessage: 'La pieza seleccionada no es un caño recto.' });
+        return;
+      }
+
+      const nd = pipeComp.parameters.nominalDiameter || get().nominalDiameter;
+      const pipeSpec = specReader.findPipe(nd, specCode);
+      const fitSpec =
+        fittingType === 'TEE'
+          ? specReader.findTee(nd, specCode)
+          : fittingType === 'VALVE'
+          ? specReader.findValve(nd, specCode)
+          : specReader.findFlange(nd, specCode);
+
+      if (!pipeSpec || !fitSpec) {
+        set({ statusMessage: `No se encontró especificación para ${fittingType} ND ${nd}".` });
+        return;
+      }
+
+      const gasketSpec = specReader.findGasket(nd, specCode);
+      const boltSetSpec = specReader.findBoltSet(nd, specCode);
+
+      try {
+        pushUndoSnapshot();
+        const result = graph.splitPipeWithFitting(pipeComp.id, fitSpec, pipeSpec, {
+          offsetMm,
+          branchDir: branchDir || activeDirection,
+          gasketSpec,
+          boltSetSpec
+        });
+        if (!result) return;
+
+        saveGraphToIndexedDb(graph.serialize());
+        const collisions = detectPipingCollisions(graph);
+        const nextPort =
+          result.fitting.type === 'TEE' && result.fitting.ports[2]
+            ? result.fitting.ports[2]
+            : result.pipe2.ports[1];
+
+        set({
+          selectedComponentId: result.fitting.id,
+          selectedPortId: nextPort.id,
+          activeDirection: nextPort.direction.clone().normalize(),
+          collidingComponentIds: collisions.collidingComponentIds,
+          version: get().version + 1,
+          statusMessage: `COMMAND: PLANTFITTINGADD • Caño partido en 2 niples (${Math.round(result.pipe1.parameters.cutLength || 0)} mm y ${Math.round(result.pipe2.parameters.cutLength || 0)} mm) con ${fittingType} insertado en línea.`
+        });
+      } catch (e: unknown) {
+        set({ statusMessage: (e as Error).message });
+      }
+    },
+
+    setLineNumber: (tag) => {
+      const { graph } = get();
+      graph.activeLineNumber = tag;
+      set({ lineNumber: tag, statusMessage: `Line Number activo: ${tag}` });
+    },
+
+    importPcfFile: (content, fileName) => {
+      try {
+        pushUndoSnapshot();
+        const { specReader, specCode } = get();
+        const { graph: importedGraph, componentCount, pipeCount, lineReference } = PcfImporter.importFromPcf(
+          content,
+          specReader,
+          specCode
+        );
+        if (componentCount === 0) {
+          set({ statusMessage: `El archivo "${fileName}" no contenía bloques PCF válidos.` });
+          return;
+        }
+        saveGraphToIndexedDb(importedGraph.serialize());
+        const openPorts = importedGraph.getOpenPorts();
+        const lastPort = openPorts.length > 0 ? openPorts[openPorts.length - 1] : null;
+        const collisions = detectPipingCollisions(importedGraph);
+
+        set({
+          graph: importedGraph,
+          lineNumber: lineReference,
+          selectedPortId: lastPort ? lastPort.id : null,
+          selectedComponentId: lastPort ? lastPort.componentId : null,
+          activeDirection: lastPort ? lastPort.direction.clone().normalize() : new THREE.Vector3(1, 0, 0),
+          collidingComponentIds: collisions.collidingComponentIds,
+          version: get().version + 1,
+          triggerFrameAll: get().triggerFrameAll + 1,
+          statusMessage: `COMMAND: PCFIMPORT • "${fileName}" cargado (${componentCount} piezas, ${pipeCount} niples en línea ${lineReference}).`
+        });
+      } catch (e: unknown) {
+        set({ statusMessage: `Error importando PCF: ${(e as Error).message}` });
+      }
     },
 
     deleteSelectedComponent: () => {

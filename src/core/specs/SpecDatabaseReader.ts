@@ -68,6 +68,13 @@ export class SpecDatabaseReader {
     }
   }
 
+  private static isValidSqliteBuffer(buf: ArrayBuffer): boolean {
+    if (buf.byteLength < 100) return false;
+    const header = new Uint8Array(buf, 0, 15);
+    const magic = String.fromCharCode(...header);
+    return magic.startsWith('SQLite format 3');
+  }
+
   /**
    * Crea una nueva instancia de SpecDatabaseReader cargando un buffer binario .pspc
    * o sembrando el catálogo predeterminado CS150 en memoria.
@@ -86,8 +93,10 @@ export class SpecDatabaseReader {
           const resp = await fetch('/RCI1.pspc');
           if (resp.ok) {
             const buf = await resp.arrayBuffer();
-            db = new SQL.Database(new Uint8Array(buf));
-            loaded = true;
+            if (SpecDatabaseReader.isValidSqliteBuffer(buf)) {
+              db = new SQL.Database(new Uint8Array(buf));
+              loaded = true;
+            }
           }
         } catch {
           // continuar con fallback
@@ -95,11 +104,7 @@ export class SpecDatabaseReader {
       }
 
       if (!loaded) {
-        db = new SQL.Database();
-        const reader = new SpecDatabaseReader(db);
-        reader.initializeSchema();
-        reader.seedDefaultData();
-        return reader;
+        return SpecDatabaseReader.createDefault('CS150');
       }
     }
     const reader = new SpecDatabaseReader(db!);
@@ -107,9 +112,26 @@ export class SpecDatabaseReader {
   }
 
   /**
+   * Crea una instancia en memoria con el catálogo ASME B31.3 / B16.9 / B16.5 para la spec indicada
+   */
+  public static async createDefault(specName: string = 'CS150'): Promise<SpecDatabaseReader> {
+    const SQL = await getSqlInstance();
+    const db = new SQL.Database();
+    const reader = new SpecDatabaseReader(db);
+    reader.specName = specName;
+    reader.initializeSchema();
+    reader.seedDefaultData(specName);
+    return reader;
+  }
+
+  /**
    * Crea una instancia a partir de un buffer binario explícito (.pspc)
    */
   public static async fromBuffer(buffer: ArrayBuffer | Uint8Array, specName?: string): Promise<SpecDatabaseReader> {
+    const rawBuf = buffer instanceof Uint8Array ? buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) : buffer;
+    if (!SpecDatabaseReader.isValidSqliteBuffer(rawBuf as ArrayBuffer)) {
+      return SpecDatabaseReader.createDefault(specName || 'CS150');
+    }
     const reader = await SpecDatabaseReader.create(buffer);
     if (specName) {
       reader.specName = specName;
@@ -166,9 +188,9 @@ export class SpecDatabaseReader {
   }
 
   /**
-   * Siembra en la base de datos el catálogo industrial CS150
+   * Siembra en la base de datos el catálogo industrial CS150 (o adaptado a targetSpecCode)
    */
-  public seedDefaultData(): void {
+  public seedDefaultData(targetSpecCode: string = 'CS150'): void {
     const insertItem = this.db.prepare(`
       INSERT OR REPLACE INTO EngineeringItems (PnPID, PartType, SpecCode, ShortDescription, CatalogId)
       VALUES (?, ?, ?, ?, ?)
@@ -188,7 +210,7 @@ export class SpecDatabaseReader {
       insertItem.run([
         record.pnpid,
         record.partType,
-        record.specCode,
+        targetSpecCode || record.specCode,
         record.shortDescription,
         record.catalogId
       ]);
