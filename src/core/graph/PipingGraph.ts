@@ -11,9 +11,22 @@ import {
   SerializedJoint,
   SerializedPort,
   ElbowPlacementResult,
+  PcfGraphInfo,
+  FieldWeldKind,
   NippleEndFinish
 } from '../../types/piping';
 import { calculateElbowPlacement, validateOpposedPorts, EPSILON } from '../math/elbowSolver';
+import { ConnectionRule, DEFAULT_CONNECTION_RULES, resolveConnection } from '../specs/connectionRules';
+import { plantEndToAppEnd } from '../specs/units';
+
+/** Extremos de Plant que son cara de brida (se unen con junta y bulones) */
+const FACE_ENDS = new Set(['FL', 'LFL', 'WF', 'LUG']);
+
+export function isFaceEnd(port: Pick<Port, 'plantEndType' | 'endType'> | undefined): boolean {
+  if (!port) return false;
+  if (port.plantEndType) return FACE_ENDS.has(port.plantEndType.toUpperCase());
+  return port.endType === 'FLANG';
+}
 
 export interface GraphCommand {
   description: string;
@@ -34,6 +47,10 @@ export class PipingGraph {
   public currentNominalDiameter: number = 2;
   public currentSchedule: string = 'SCH 40';
   public activeLineNumber: string = '100-CS150-2"';
+  /** Reglas de unión de Plant (DefaultConnectorsConfig.xml del proyecto) */
+  public connectionRules: ConnectionRule[] = DEFAULT_CONNECTION_RULES;
+  /** Cabecera y unidades del PCF importado (para reexportarlo igual) */
+  public pcfInfo?: PcfGraphInfo;
 
   private undoStack: GraphCommand[] = [];
   private redoStack: GraphCommand[] = [];
@@ -49,6 +66,62 @@ export class PipingGraph {
    */
   private generateId(prefix: string): string {
     return `${prefix}_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+  }
+
+  /** Arma un puerto tomando diámetro, OD y extremo del puerto Sn de la pieza de spec */
+  private portFromSpec(
+    componentId: string,
+    index: number,
+    position: THREE.Vector3,
+    direction: THREE.Vector3,
+    spec: SpecFitting,
+    specPortIndex: number
+  ): Port {
+    const plantEnd = spec.plantEndTypes?.[specPortIndex];
+    return {
+      id: this.generateId('prt'),
+      componentId,
+      index,
+      position: position.clone(),
+      direction: direction.clone().normalize(),
+      nominalDiameter: spec.portNominalDiameters?.[specPortIndex] ?? spec.nominalDiameter,
+      outerDiameter: spec.portOuterDiameters?.[specPortIndex] || spec.outerDiameter,
+      wallThickness: spec.wallThickness,
+      schedule: spec.schedule,
+      endType: plantEnd ? plantEndToAppEnd(plantEnd) : spec.endType,
+      plantEndType: plantEnd,
+      pressureClass: spec.pressureClass
+    };
+  }
+
+  /** Datos de la pieza de spec que viajan con el componente (para PCF, BOM y avisos) */
+  private specParameters(spec: SpecFitting): Partial<Component['parameters']> {
+    return {
+      itemCode: spec.itemCode,
+      skey: spec.skey,
+      familyId: spec.familyId,
+      familyDescription: spec.familyDescription,
+      pressureClass: spec.pressureClass,
+      geometryConfidence: spec.geometryConfidence,
+      geometryNote: spec.geometryNote,
+      visual: spec.visual
+    };
+  }
+
+  /** Unión entre dos puertos según las reglas de Plant (o por tipo de extremo si no hay datos de Plant) */
+  public resolveJoint(a: Port, b: Port): { jointType: JointType; plantJoint?: string; problems: string[] } {
+    if (a.plantEndType && b.plantEndType) {
+      const r = resolveConnection(
+        { endType: a.plantEndType, nominalDiameter: a.nominalDiameter, pressureClass: a.pressureClass },
+        { endType: b.plantEndType, nominalDiameter: b.nominalDiameter, pressureClass: b.pressureClass },
+        this.connectionRules
+      );
+      return { jointType: r.jointType, plantJoint: r.rule?.name, problems: r.problems };
+    }
+    if (a.endType === 'FLANG' && b.endType === 'FLANG') return { jointType: 'FLANGED', problems: [] };
+    if (a.endType === 'SW' || b.endType === 'SW') return { jointType: 'SOCKETWELD', problems: [] };
+    if (a.endType === 'THD' || b.endType === 'THD') return { jointType: 'THREADED', problems: [] };
+    return { jointType: 'BUTTWELD', problems: [] };
   }
 
   /**
@@ -83,7 +156,7 @@ export class PipingGraph {
   /**
    * Conecta dos puertos polares mediante una junta (Joint), validando alineación opuesta
    */
-  public connectPorts(portAId: string, portBId: string, jointType: JointType = 'BUTTWELD'): Joint {
+  public connectPorts(portAId: string, portBId: string, jointType?: JointType, opts: { gapMm?: number } = {}): Joint {
     const portA = this.ports.get(portAId);
     const portB = this.ports.get(portBId);
 
@@ -95,11 +168,12 @@ export class PipingGraph {
       throw new Error(`Uno de los puertos ya está conectado a otra junta.`);
     }
 
-    // Validación de coincidencia espacial (en milímetros)
+    // Validación de coincidencia espacial (en milímetros); entre bridas queda el espesor de la junta
+    const gap = opts.gapMm ?? 0;
     const dist = portA.position.distanceTo(portB.position);
-    if (dist > 1.0) {
+    if (Math.abs(dist - gap) > 1.0) {
       throw new Error(
-        `Los puertos no coinciden en posición espacial: distancia = ${dist.toFixed(2)} mm (máx permitido 1.0 mm).`
+        `Los puertos no coinciden en posición espacial: distancia = ${dist.toFixed(2)} mm (esperado ${gap.toFixed(2)} mm ± 1 mm).`
       );
     }
 
@@ -110,13 +184,16 @@ export class PipingGraph {
       );
     }
 
+    const resolved = this.resolveJoint(portA, portB);
     const jointId = this.generateId('jnt');
     const joint: Joint = {
       id: jointId,
-      type: jointType,
+      type: jointType ?? resolved.jointType,
       portAId: portA.id,
       portBId: portB.id,
-      position: portA.position.clone()
+      position: portA.position.clone().lerp(portB.position, 0.5),
+      gapMm: gap > 0 ? gap : undefined,
+      plantJoint: resolved.plantJoint
     };
 
     this.joints.set(joint.id, joint);
@@ -167,31 +244,8 @@ export class PipingGraph {
     // Port 2 apunta hacia adelante (hacia afuera del caño desde end)
     const dir2 = forward.clone();
 
-    const port1: Port = {
-      id: port1Id,
-      componentId: compId,
-      index: 1,
-      position: start.clone(),
-      direction: dir1,
-      nominalDiameter: fittingSpec.nominalDiameter,
-      outerDiameter: fittingSpec.outerDiameter,
-      wallThickness: fittingSpec.wallThickness,
-      schedule: fittingSpec.schedule,
-      endType: fittingSpec.endType
-    };
-
-    const port2: Port = {
-      id: port2Id,
-      componentId: compId,
-      index: 2,
-      position: end.clone(),
-      direction: dir2,
-      nominalDiameter: fittingSpec.nominalDiameter,
-      outerDiameter: fittingSpec.outerDiameter,
-      wallThickness: fittingSpec.wallThickness,
-      schedule: fittingSpec.schedule,
-      endType: fittingSpec.endType
-    };
+    const port1: Port = { ...this.portFromSpec(compId, 1, start, dir1, fittingSpec, 0), id: port1Id };
+    const port2: Port = { ...this.portFromSpec(compId, 2, end, dir2, fittingSpec, 1), id: port2Id };
 
     const component: Component = {
       id: compId,
@@ -207,7 +261,8 @@ export class PipingGraph {
         schedule: fittingSpec.schedule,
         grossLength: length,
         cutLength: customCutLength !== undefined ? customCutLength : length,
-        description: fittingSpec.shortDescription
+        description: fittingSpec.shortDescription,
+        ...this.specParameters(fittingSpec)
       }
     };
 
@@ -231,31 +286,8 @@ export class PipingGraph {
     // Puerto 2 en cutPoint2: su normal exterior apunta hacia la cañería saliente (uOut)
     const dir2 = new THREE.Vector3().subVectors(placement.cutPoint2, placement.vertex).normalize();
 
-    const port1: Port = {
-      id: port1Id,
-      componentId: compId,
-      index: 1,
-      position: placement.cutPoint1.clone(),
-      direction: dir1,
-      nominalDiameter: elbowSpec.nominalDiameter,
-      outerDiameter: elbowSpec.outerDiameter,
-      wallThickness: elbowSpec.wallThickness,
-      schedule: elbowSpec.schedule,
-      endType: elbowSpec.endType
-    };
-
-    const port2: Port = {
-      id: port2Id,
-      componentId: compId,
-      index: 2,
-      position: placement.cutPoint2.clone(),
-      direction: dir2,
-      nominalDiameter: elbowSpec.nominalDiameter,
-      outerDiameter: elbowSpec.outerDiameter,
-      wallThickness: elbowSpec.wallThickness,
-      schedule: elbowSpec.schedule,
-      endType: elbowSpec.endType
-    };
+    const port1: Port = { ...this.portFromSpec(compId, 1, placement.cutPoint1, dir1, elbowSpec, 0), id: port1Id };
+    const port2: Port = { ...this.portFromSpec(compId, 2, placement.cutPoint2, dir2, elbowSpec, 1), id: port2Id };
 
     const component: Component = {
       id: compId,
@@ -273,7 +305,8 @@ export class PipingGraph {
         radius: elbowSpec.radius || elbowSpec.takeOff,
         takeOff: elbowSpec.takeOff,
         description: elbowSpec.shortDescription,
-        matrixElements: Array.from(placement.matrix.elements)
+        matrixElements: Array.from(placement.matrix.elements),
+        ...this.specParameters(elbowSpec)
       }
     };
 
@@ -319,10 +352,10 @@ export class PipingGraph {
     const outgoingPipe = this.addPipe(placement.cutPoint2, pNext, pipeSpec, placement.netLengthOutgoing);
 
     // 5. Unir cañería entrante (puerto 2) con codo (puerto 1)
-    const jointIn = this.connectPorts(incomingPipe.ports[1].id, elbow.ports[0].id, 'BUTTWELD');
+    const jointIn = this.connectPorts(incomingPipe.ports[1].id, elbow.ports[0].id);
 
     // 6. Unir codo (puerto 2) con cañería saliente (puerto 1)
-    const jointOut = this.connectPorts(elbow.ports[1].id, outgoingPipe.ports[0].id, 'BUTTWELD');
+    const jointOut = this.connectPorts(elbow.ports[1].id, outgoingPipe.ports[0].id);
 
     return {
       incomingPipe,
@@ -335,7 +368,10 @@ export class PipingGraph {
   }
 
   /**
-   * Inserta una brida (FLANGE) en un puerto abierto aplicando reglas P3dJoint (Gasket + BoltSet)
+   * Inserta una brida en un puerto abierto, orientada como en Plant 3D:
+   * - si el puerto es un caño o accesorio, la brida entra por su lado caño (S2) y queda la cara libre;
+   * - si el puerto es una cara (otra brida o una válvula bridada), entra cara contra cara dejando
+   *   el espesor de la junta, y queda libre el lado caño.
    */
   public addFlange(
     port: Port,
@@ -344,42 +380,24 @@ export class PipingGraph {
     boltSetSpec?: SpecFitting | null
   ): Component {
     const compId = this.generateId('flg');
-    const port1Id = this.generateId('prt');
-    const port2Id = this.generateId('prt');
-    const L = flangeSpec.faceToFace || 63.5;
+    const span = flangeSpec.faceToFace || 63.5;
+    const faceFirst = isFaceEnd(port);
+    const gap = faceFirst ? gasketSpec?.gasketThicknessMm ?? 0 : 0;
+    const dir = port.direction.clone().normalize();
 
-    const p1 = port.position.clone();
-    const p2 = p1.clone().add(port.direction.clone().multiplyScalar(L));
-
-    const port1: Port = {
-      id: port1Id,
-      componentId: compId,
-      index: 1,
-      position: p1.clone(),
-      direction: port.direction.clone().negate(),
-      nominalDiameter: flangeSpec.nominalDiameter,
-      outerDiameter: flangeSpec.outerDiameter,
-      wallThickness: flangeSpec.wallThickness,
-      schedule: flangeSpec.schedule,
-      endType: flangeSpec.endType
-    };
-
-    const port2: Port = {
-      id: port2Id,
-      componentId: compId,
-      index: 2,
-      position: p2.clone(),
-      direction: port.direction.clone(),
-      nominalDiameter: flangeSpec.nominalDiameter,
-      outerDiameter: flangeSpec.outerDiameter,
-      wallThickness: flangeSpec.wallThickness,
-      schedule: flangeSpec.schedule,
-      endType: 'FLANG'
-    };
+    const p1 = port.position.clone().addScaledVector(dir, gap);
+    const p2 = p1.clone().addScaledVector(dir, span);
+    // En la spec de Plant S1 es la cara (FL) y S2 el lado caño
+    const port1 = this.portFromSpec(compId, 1, p1, dir.clone().negate(), flangeSpec, faceFirst ? 0 : 1);
+    const port2 = this.portFromSpec(compId, 2, p2, dir, flangeSpec, faceFirst ? 1 : 0);
+    if (!flangeSpec.plantEndTypes) {
+      port1.endType = faceFirst ? 'FLANG' : flangeSpec.endType;
+      port2.endType = faceFirst ? flangeSpec.endType : 'FLANG';
+    }
 
     const nd = flangeSpec.nominalDiameter;
-    const defaultBoltCount = flangeSpec.boltHoles || (nd >= 4 ? 8 : 4);
-    const defaultBoltSize = nd >= 4 ? '5/8"' : '1/2"';
+    const defaultBoltCount = boltSetSpec?.boltCount || flangeSpec.boltHoles || (nd >= 4 ? 8 : 4);
+    const defaultBoltSize = boltSetSpec?.boltSize || (nd >= 4 ? '5/8"' : '1/2"');
 
     const component: Component = {
       id: compId,
@@ -389,34 +407,32 @@ export class PipingGraph {
       ports: [port1, port2],
       centerline: [p1.clone(), p2.clone()],
       parameters: {
-        nominalDiameter: flangeSpec.nominalDiameter,
+        nominalDiameter: nd,
         outerDiameter: flangeSpec.outerDiameter,
         wallThickness: flangeSpec.wallThickness,
         schedule: flangeSpec.schedule,
-        faceToFace: L,
+        faceToFace: span,
         boltCircle: flangeSpec.boltCircle || flangeSpec.outerDiameter * 1.3,
-        boltHoles: boltSetSpec?.boltCount || defaultBoltCount,
+        boltHoles: defaultBoltCount,
         description: flangeSpec.shortDescription,
-        gasketDescription:
-          gasketSpec?.shortDescription || `GASKET, 150 LB, CS/PTFE ASME B16.21 ND ${nd}"`,
-        gasketThicknessMm: gasketSpec?.gasketThicknessMm || 1.59,
-        boltSetDescription:
-          boltSetSpec?.shortDescription ||
-          `BOLT SET, RF, 150 LB (${defaultBoltCount}x ${defaultBoltSize} Stud Bolt ASTM A193 B7)`,
-        boltSize: boltSetSpec?.boltSize || defaultBoltSize,
-        boltCount: boltSetSpec?.boltCount || defaultBoltCount,
-        boltLengthMm: boltSetSpec?.boltLengthMm || 70
+        gasketDescription: gasketSpec?.shortDescription,
+        gasketThicknessMm: gasketSpec?.gasketThicknessMm,
+        boltSetDescription: boltSetSpec?.shortDescription,
+        boltSize: defaultBoltSize,
+        boltCount: defaultBoltCount,
+        boltLengthMm: boltSetSpec?.boltLengthMm,
+        ...this.specParameters(flangeSpec)
       }
     };
 
     this.addComponent(component);
-    const jointType: JointType = port.endType === 'FLANG' ? 'FLANGED' : 'BUTTWELD';
-    this.connectPorts(port.id, port1.id, jointType);
+    this.connectPorts(port.id, port1.id, undefined, { gapMm: gap });
     return component;
   }
 
   /**
-   * Inserta una válvula industrial (VALVE) en un puerto abierto aplicando reglas P3dJoint (Gasket + BoltSet)
+   * Inserta una válvula en un puerto abierto. Si los dos lados son caras de brida deja el
+   * espesor de la junta; la junta y los bulones salen de la unión, no de la válvula.
    */
   public addValve(
     port: Port,
@@ -425,42 +441,23 @@ export class PipingGraph {
     boltSetSpec?: SpecFitting | null
   ): Component {
     const compId = this.generateId('vlv');
-    const port1Id = this.generateId('prt');
-    const port2Id = this.generateId('prt');
-    const L = valveSpec.faceToFace || 178.0;
+    const span = valveSpec.faceToFace || 178.0;
+    const dir = port.direction.clone().normalize();
+    const valveFace = valveSpec.plantEndTypes ? isFaceEnd({ plantEndType: valveSpec.plantEndTypes[0], endType: valveSpec.endType }) : true;
+    const gap = valveFace && isFaceEnd(port) ? gasketSpec?.gasketThicknessMm ?? 0 : 0;
 
-    const p1 = port.position.clone();
-    const p2 = p1.clone().add(port.direction.clone().multiplyScalar(L));
-
-    const port1: Port = {
-      id: port1Id,
-      componentId: compId,
-      index: 1,
-      position: p1.clone(),
-      direction: port.direction.clone().negate(),
-      nominalDiameter: valveSpec.nominalDiameter,
-      outerDiameter: valveSpec.outerDiameter,
-      wallThickness: valveSpec.wallThickness,
-      schedule: valveSpec.schedule,
-      endType: 'FLANG'
-    };
-
-    const port2: Port = {
-      id: port2Id,
-      componentId: compId,
-      index: 2,
-      position: p2.clone(),
-      direction: port.direction.clone(),
-      nominalDiameter: valveSpec.nominalDiameter,
-      outerDiameter: valveSpec.outerDiameter,
-      wallThickness: valveSpec.wallThickness,
-      schedule: valveSpec.schedule,
-      endType: 'FLANG'
-    };
+    const p1 = port.position.clone().addScaledVector(dir, gap);
+    const p2 = p1.clone().addScaledVector(dir, span);
+    const port1 = this.portFromSpec(compId, 1, p1, dir.clone().negate(), valveSpec, 0);
+    const port2 = this.portFromSpec(compId, 2, p2, dir, valveSpec, 1);
+    if (!valveSpec.plantEndTypes) {
+      port1.endType = 'FLANG';
+      port2.endType = 'FLANG';
+    }
 
     const nd = valveSpec.nominalDiameter;
-    const defaultBoltCount = valveSpec.boltHoles || (nd >= 4 ? 8 : 4);
-    const defaultBoltSize = nd >= 4 ? '5/8"' : '1/2"';
+    const defaultBoltCount = boltSetSpec?.boltCount || valveSpec.boltHoles || (nd >= 4 ? 8 : 4);
+    const defaultBoltSize = boltSetSpec?.boltSize || (nd >= 4 ? '5/8"' : '1/2"');
 
     const component: Component = {
       id: compId,
@@ -470,40 +467,35 @@ export class PipingGraph {
       ports: [port1, port2],
       centerline: [p1.clone(), p2.clone()],
       parameters: {
-        nominalDiameter: valveSpec.nominalDiameter,
+        nominalDiameter: nd,
         outerDiameter: valveSpec.outerDiameter,
         wallThickness: valveSpec.wallThickness,
         schedule: valveSpec.schedule,
-        faceToFace: L,
+        faceToFace: span,
         boltCircle: valveSpec.boltCircle || valveSpec.outerDiameter * 1.3,
-        boltHoles: boltSetSpec?.boltCount || defaultBoltCount,
+        boltHoles: valveFace ? defaultBoltCount : undefined,
         description: valveSpec.shortDescription,
-        gasketDescription:
-          gasketSpec?.shortDescription || `GASKET, 150 LB, CS/PTFE ASME B16.21 ND ${nd}"`,
-        gasketThicknessMm: gasketSpec?.gasketThicknessMm || 1.59,
-        boltSetDescription:
-          boltSetSpec?.shortDescription ||
-          `BOLT SET, RF, 150 LB (${defaultBoltCount}x ${defaultBoltSize} Stud Bolt ASTM A193 B7)`,
-        boltSize: boltSetSpec?.boltSize || defaultBoltSize,
-        boltCount: boltSetSpec?.boltCount || defaultBoltCount,
-        boltLengthMm: boltSetSpec?.boltLengthMm || 70
+        gasketDescription: valveFace ? gasketSpec?.shortDescription : undefined,
+        gasketThicknessMm: valveFace ? gasketSpec?.gasketThicknessMm : undefined,
+        boltSetDescription: valveFace ? boltSetSpec?.shortDescription : undefined,
+        boltSize: valveFace ? defaultBoltSize : undefined,
+        boltCount: valveFace ? defaultBoltCount : undefined,
+        boltLengthMm: valveFace ? boltSetSpec?.boltLengthMm : undefined,
+        ...this.specParameters(valveSpec)
       }
     };
 
     this.addComponent(component);
-    const jointType: JointType = port.endType === 'FLANG' ? 'FLANGED' : 'BUTTWELD';
-    this.connectPorts(port.id, port1.id, jointType);
+    this.connectPorts(port.id, port1.id, undefined, { gapMm: gap });
     return component;
   }
 
   /**
-   * Inserta una Te igual (TEE) en un puerto abierto garantizando ortogonalidad de 90° en la derivación
+   * Inserta una Te en un puerto abierto garantizando 90° en la derivación.
+   * Si la pieza de spec es reductora, el ramal toma su diámetro y OD reales (puerto S3).
    */
   public addTee(port: Port, branchDir: THREE.Vector3, teeSpec: SpecFitting): Component {
     const compId = this.generateId('tee');
-    const port1Id = this.generateId('prt');
-    const port2Id = this.generateId('prt');
-    const port3Id = this.generateId('prt');
 
     const C = teeSpec.runTakeOff || 63.5;
     const M = teeSpec.branchTakeOff || 63.5;
@@ -522,44 +514,9 @@ export class PipingGraph {
     bDir.normalize();
     const p3 = vertex.clone().add(bDir.clone().multiplyScalar(M));
 
-    const port1: Port = {
-      id: port1Id,
-      componentId: compId,
-      index: 1,
-      position: p1.clone(),
-      direction: uRun.clone().negate(),
-      nominalDiameter: teeSpec.nominalDiameter,
-      outerDiameter: teeSpec.outerDiameter,
-      wallThickness: teeSpec.wallThickness,
-      schedule: teeSpec.schedule,
-      endType: teeSpec.endType
-    };
-
-    const port2: Port = {
-      id: port2Id,
-      componentId: compId,
-      index: 2,
-      position: p2.clone(),
-      direction: uRun.clone(),
-      nominalDiameter: teeSpec.nominalDiameter,
-      outerDiameter: teeSpec.outerDiameter,
-      wallThickness: teeSpec.wallThickness,
-      schedule: teeSpec.schedule,
-      endType: teeSpec.endType
-    };
-
-    const port3: Port = {
-      id: port3Id,
-      componentId: compId,
-      index: 3,
-      position: p3.clone(),
-      direction: bDir.clone(),
-      nominalDiameter: teeSpec.nominalDiameter,
-      outerDiameter: teeSpec.outerDiameter,
-      wallThickness: teeSpec.wallThickness,
-      schedule: teeSpec.schedule,
-      endType: teeSpec.endType
-    };
+    const port1 = this.portFromSpec(compId, 1, p1, uRun.clone().negate(), teeSpec, 0);
+    const port2 = this.portFromSpec(compId, 2, p2, uRun, teeSpec, 1);
+    const port3 = this.portFromSpec(compId, 3, p3, bDir, teeSpec, 2);
 
     const component: Component = {
       id: compId,
@@ -575,12 +532,15 @@ export class PipingGraph {
         schedule: teeSpec.schedule,
         runTakeOff: C,
         branchTakeOff: M,
-        description: teeSpec.shortDescription
+        reducedNominalDiameter: teeSpec.reducedNominalDiameter,
+        reducedOuterDiameter: teeSpec.reducedOuterDiameter,
+        description: teeSpec.shortDescription,
+        ...this.specParameters(teeSpec)
       }
     };
 
     this.addComponent(component);
-    this.connectPorts(port.id, port1.id, 'BUTTWELD');
+    this.connectPorts(port.id, port1.id);
     return component;
   }
 
@@ -833,8 +793,11 @@ export class PipingGraph {
   }
 
   /**
-   * Parte un caño existente en dos niples e inserta un accesorio en línea (TEE, VALVE, FLANGE)
-   * descontando automáticamente los take-offs / face-to-face y reconectando las juntas (como AutoCAD Plant 3D).
+   * Parte un caño existente en dos niples e inserta un accesorio en línea, descontando los
+   * largos reales y reconectando las uniones (como AutoCAD Plant 3D):
+   * - TEE: una tee de la spec;
+   * - VALVE: la válvula; si es bridada y el caño no, entran las dos bridas con sus juntas (AutoFlange);
+   * - FLANGE: una unión bridada (par de bridas con junta).
    */
   public splitPipeWithFitting(
     pipeId: string,
@@ -845,8 +808,10 @@ export class PipingGraph {
       branchDir?: THREE.Vector3;
       gasketSpec?: SpecFitting | null;
       boltSetSpec?: SpecFitting | null;
+      /** Brida a usar cuando hay que bridar una válvula o armar una unión bridada */
+      flangeSpec?: SpecFitting | null;
     }
-  ): { pipe1: Component; fitting: Component; pipe2: Component } | null {
+  ): { pipe1: Component; fitting: Component; pipe2: Component; extra: Component[] } | null {
     const origPipe = this.components.get(pipeId);
     if (!origPipe || origPipe.type !== 'PIPE' || origPipe.ports.length < 2) return null;
 
@@ -855,137 +820,119 @@ export class PipingGraph {
     const totalLen = pStart.distanceTo(pEnd);
     const uRun = new THREE.Vector3().subVectors(pEnd, pStart).normalize();
 
-    let halfSpan1 = 0;
-    let halfSpan2 = 0;
-    if (fittingSpec.partType === 'TEE') {
-      const C = fittingSpec.runTakeOff || 63.5;
-      halfSpan1 = C;
-      halfSpan2 = C;
-    } else {
-      const L = fittingSpec.faceToFace || 100;
-      halfSpan1 = L / 2;
-      halfSpan2 = L / 2;
-    }
+    const gap = options?.gasketSpec?.gasketThicknessMm ?? 0;
+    const flangeSpan = options?.flangeSpec?.faceToFace ?? 0;
+    const valveIsFlanged =
+      fittingSpec.partType === 'VALVE' &&
+      (fittingSpec.plantEndTypes ? isFaceEnd({ plantEndType: fittingSpec.plantEndTypes[0], endType: fittingSpec.endType }) : false);
+    const needsFlanges = (valveIsFlanged || fittingSpec.partType === 'FLANGE') && !!options?.flangeSpec;
+
+    let span = 0;
+    if (fittingSpec.partType === 'TEE') span = 2 * (fittingSpec.runTakeOff || 63.5);
+    else if (fittingSpec.partType === 'FLANGE') span = needsFlanges ? 2 * flangeSpan + gap : fittingSpec.faceToFace || 100;
+    else span = (fittingSpec.faceToFace || 100) + (needsFlanges ? 2 * flangeSpan + 2 * gap : 0);
 
     const minNipple = 50;
-    if (totalLen < halfSpan1 + halfSpan2 + minNipple * 2) {
+    if (totalLen < span + minNipple * 2) {
       throw new Error(
-        `El caño (${Math.round(totalLen)} mm) es demasiado corto para insertar ${fittingSpec.partType} y dejar dos niples mínimos de ${minNipple} mm.`
+        `El caño (${Math.round(totalLen)} mm) es demasiado corto para insertar ${fittingSpec.partType} (${Math.round(span)} mm) y dejar dos niples mínimos de ${minNipple} mm.`
       );
     }
 
     const defaultCenter = totalLen / 2;
     const centerDist = THREE.MathUtils.clamp(
       options?.offsetMm !== undefined ? options.offsetMm : defaultCenter,
-      halfSpan1 + minNipple,
-      totalLen - halfSpan2 - minNipple
+      span / 2 + minNipple,
+      totalLen - span / 2 - minNipple
     );
-
-    const cut1 = pStart.clone().add(uRun.clone().multiplyScalar(centerDist - halfSpan1));
-    const cut2 = pStart.clone().add(uRun.clone().multiplyScalar(centerDist + halfSpan2));
+    const cut1 = pStart.clone().add(uRun.clone().multiplyScalar(centerDist - span / 2));
 
     // Recordar conexiones previas en los extremos del caño original
-    let upstreamOtherPortId: string | null = null;
-    let upstreamJointType: JointType = 'BUTTWELD';
-    if (origPipe.ports[0].connectedJointId) {
-      const j0 = this.joints.get(origPipe.ports[0].connectedJointId);
-      if (j0) {
-        upstreamOtherPortId = j0.portAId === origPipe.ports[0].id ? j0.portBId : j0.portAId;
-        upstreamJointType = j0.type;
-      }
-    }
+    const otherEnd = (portIdx: number): { id: string; type: JointType } | null => {
+      const jid = origPipe.ports[portIdx].connectedJointId;
+      const j = jid ? this.joints.get(jid) : undefined;
+      if (!j) return null;
+      return { id: j.portAId === origPipe.ports[portIdx].id ? j.portBId : j.portAId, type: j.type };
+    };
+    const upstream = otherEnd(0);
+    const downstream = otherEnd(1);
 
-    let downstreamOtherPortId: string | null = null;
-    let downstreamJointType: JointType = 'BUTTWELD';
-    if (origPipe.ports[1].connectedJointId) {
-      const j1 = this.joints.get(origPipe.ports[1].connectedJointId);
-      if (j1) {
-        downstreamOtherPortId = j1.portAId === origPipe.ports[1].id ? j1.portBId : j1.portAId;
-        downstreamJointType = j1.type;
-      }
-    }
-
-    // Eliminar caño original
     this.removeComponent(origPipe.id);
 
-    // 1. Crear Niple 1 (desde pStart hasta cut1)
     const pipe1 = this.addPipe(pStart, cut1, pipeSpec, pStart.distanceTo(cut1));
-    if (upstreamOtherPortId) {
-      this.connectPorts(upstreamOtherPortId, pipe1.ports[0].id, upstreamJointType);
-    }
+    this.inheritPipeIdentity(origPipe, pipe1);
+    if (upstream) this.connectPorts(upstream.id, pipe1.ports[0].id, upstream.type);
 
-    // 2. Insertar el accesorio en el puerto de salida de pipe1
+    const extra: Component[] = [];
     let fitting: Component;
+    let outPort: Port;
     if (fittingSpec.partType === 'TEE') {
       const bDir =
         options?.branchDir ||
         (Math.abs(uRun.z) < 0.8 ? new THREE.Vector3(0, 0, 1) : new THREE.Vector3(0, 1, 0));
       fitting = this.addTee(pipe1.ports[1], bDir, fittingSpec);
+      outPort = fitting.ports[1];
     } else if (fittingSpec.partType === 'VALVE') {
-      fitting = this.addValve(pipe1.ports[1], fittingSpec, options?.gasketSpec, options?.boltSetSpec);
+      let inPort = pipe1.ports[1];
+      if (needsFlanges) {
+        const fA = this.addFlange(inPort, options!.flangeSpec!, options?.gasketSpec, options?.boltSetSpec);
+        extra.push(fA);
+        inPort = fA.ports[1];
+      }
+      fitting = this.addValve(inPort, fittingSpec, options?.gasketSpec, options?.boltSetSpec);
+      outPort = fitting.ports[1];
+      if (needsFlanges) {
+        const fB = this.addFlange(outPort, options!.flangeSpec!, options?.gasketSpec, options?.boltSetSpec);
+        extra.push(fB);
+        outPort = fB.ports[1];
+      }
     } else {
-      fitting = this.addFlange(pipe1.ports[1], fittingSpec, options?.gasketSpec, options?.boltSetSpec);
+      fitting = this.addFlange(pipe1.ports[1], needsFlanges ? options!.flangeSpec! : fittingSpec, options?.gasketSpec, options?.boltSetSpec);
+      outPort = fitting.ports[1];
+      if (needsFlanges) {
+        const fB = this.addFlange(outPort, options!.flangeSpec!, options?.gasketSpec, options?.boltSetSpec);
+        extra.push(fB);
+        outPort = fB.ports[1];
+      }
     }
 
-    // 3. Crear Niple 2 (desde cut2 hasta pEnd) y conectarlo a la salida del accesorio
-    const pipe2 = this.addPipe(cut2, pEnd, pipeSpec, cut2.distanceTo(pEnd));
-    const fitOutPort = fitting.ports[1];
-    const jointTypeOut: JointType = fitOutPort.endType === 'FLANG' ? 'FLANGED' : 'BUTTWELD';
-    this.connectPorts(fitOutPort.id, pipe2.ports[0].id, jointTypeOut);
+    const pipe2Start = outPort.position.clone();
+    const pipe2 = this.addPipe(pipe2Start, pEnd, pipeSpec, pipe2Start.distanceTo(pEnd));
+    this.inheritPipeIdentity(origPipe, pipe2);
+    this.connectPorts(outPort.id, pipe2.ports[0].id);
+    if (downstream) this.connectPorts(pipe2.ports[1].id, downstream.id, downstream.type);
 
-    if (downstreamOtherPortId) {
-      this.connectPorts(pipe2.ports[1].id, downstreamOtherPortId, downstreamJointType);
-    }
-
-    return { pipe1, fitting, pipe2 };
+    return { pipe1, fitting, pipe2, extra };
   }
 
   /**
-   * Inserta una reducción concéntrica (REDUCER) en un puerto abierto
+   * Inserta una reducción en un puerto abierto. El extremo chico toma diámetro y OD del
+   * puerto S2 de la spec; las excéntricas corren el eje chico (por defecto, plano abajo).
    */
   public addReducer(port: Port, reducerSpec: SpecFitting): Component {
     const compId = this.generateId('red');
-    const port1Id = this.generateId('prt');
-    const port2Id = this.generateId('prt');
     const L = reducerSpec?.faceToFace || 88.9;
-
-    const p1 = port.position.clone();
-    const p2 = p1.clone().add(port.direction.clone().multiplyScalar(L));
+    const dir = port.direction.clone().normalize();
 
     const nd1 = reducerSpec?.nominalDiameter || port.nominalDiameter;
     const od1 = reducerSpec?.outerDiameter || port.outerDiameter;
-    const wt = reducerSpec?.wallThickness || port.wallThickness;
-    const sch = reducerSpec?.schedule || port.schedule;
-    const endType = reducerSpec?.endType || 'BUTTWELD';
-
     const targetND = reducerSpec?.reducedNominalDiameter || (nd1 > 1 ? nd1 - 1 : 2);
-    const targetOD = reducerSpec?.reducedOuterDiameter || (targetND * 25.4);
+    const targetOD = reducerSpec?.reducedOuterDiameter || targetND * 25.4;
 
-    const port1: Port = {
-      id: port1Id,
-      componentId: compId,
-      index: 1,
-      position: p1.clone(),
-      direction: port.direction.clone().negate(),
-      nominalDiameter: nd1,
-      outerDiameter: od1,
-      wallThickness: wt,
-      schedule: sch,
-      endType: endType
-    };
+    const p1 = port.position.clone();
+    const p2 = p1.clone().addScaledVector(dir, L);
+    const offset = reducerSpec?.lateralOffset ?? 0;
+    if (offset > 0) {
+      // Plano abajo: el eje chico baja (dirección -Z); en tramos verticales se usa -X
+      const down = Math.abs(dir.z) > 0.9 ? new THREE.Vector3(-1, 0, 0) : new THREE.Vector3(0, 0, -1);
+      down.addScaledVector(dir, -down.dot(dir)).normalize();
+      p2.addScaledVector(down, offset);
+    }
 
-    const port2: Port = {
-      id: port2Id,
-      componentId: compId,
-      index: 2,
-      position: p2.clone(),
-      direction: port.direction.clone(),
-      nominalDiameter: targetND,
-      outerDiameter: targetOD,
-      wallThickness: wt,
-      schedule: sch,
-      endType: endType
-    };
+    const port1 = this.portFromSpec(compId, 1, p1, dir.clone().negate(), reducerSpec, 0);
+    const port2 = this.portFromSpec(compId, 2, p2, dir, reducerSpec, 1);
+    port2.nominalDiameter = targetND;
+    port2.outerDiameter = targetOD;
 
     const component: Component = {
       id: compId,
@@ -999,41 +946,30 @@ export class PipingGraph {
         outerDiameter: od1,
         reducedNominalDiameter: targetND,
         reducedOuterDiameter: targetOD,
-        wallThickness: wt,
-        schedule: sch,
+        wallThickness: reducerSpec.wallThickness || port.wallThickness,
+        schedule: reducerSpec.schedule || port.schedule,
         faceToFace: L,
-        description: reducerSpec?.shortDescription || `Reducción ${nd1}"x${targetND}"`
+        lateralOffset: offset > 0 ? offset : undefined,
+        description: reducerSpec?.shortDescription || `Reducción ${nd1}"x${targetND}"`,
+        ...this.specParameters(reducerSpec)
       }
     };
 
     this.addComponent(component);
-    this.connectPorts(port.id, port1.id, 'BUTTWELD');
+    this.connectPorts(port.id, port1.id);
     return component;
   }
 
   /**
-   * Inserta una tapa / casquete (CAP) en un puerto abierto (cierre de línea)
+   * Inserta una tapa (CAP) en un puerto abierto (cierre de línea)
    */
   public addCap(port: Port, capSpec: SpecFitting): Component {
     const compId = this.generateId('cap');
-    const port1Id = this.generateId('prt');
     const H = capSpec.faceToFace || 38.1;
 
     const p1 = port.position.clone();
     const p2 = p1.clone().add(port.direction.clone().multiplyScalar(H));
-
-    const port1: Port = {
-      id: port1Id,
-      componentId: compId,
-      index: 1,
-      position: p1.clone(),
-      direction: port.direction.clone().negate(),
-      nominalDiameter: capSpec.nominalDiameter,
-      outerDiameter: capSpec.outerDiameter,
-      wallThickness: capSpec.wallThickness,
-      schedule: capSpec.schedule,
-      endType: capSpec.endType
-    };
+    const port1 = this.portFromSpec(compId, 1, p1, port.direction.clone().negate(), capSpec, 0);
 
     const component: Component = {
       id: compId,
@@ -1048,13 +984,36 @@ export class PipingGraph {
         wallThickness: capSpec.wallThickness,
         schedule: capSpec.schedule,
         faceToFace: H,
-        description: capSpec.shortDescription
+        description: capSpec.shortDescription,
+        ...this.specParameters(capSpec)
       }
     };
 
     this.addComponent(component);
-    this.connectPorts(port.id, port1.id, 'BUTTWELD');
+    this.connectPorts(port.id, port1.id);
     return component;
+  }
+
+  /**
+   * Marca una soldadura como de campo (FW), de campo con sobrelargo (FFW) o de taller (null).
+   * Las de campo cortan el spool; el sobrelargo se suma al corte del caño.
+   */
+  public setFieldWeld(jointId: string, kind: FieldWeldKind | null, allowanceMm = 100): Joint | null {
+    const joint = this.joints.get(jointId);
+    if (!joint || joint.type === 'FLANGED') return null;
+    joint.fieldWeld = kind ?? undefined;
+    joint.fieldAllowanceMm = kind === 'FFW' ? allowanceMm : undefined;
+    return joint;
+  }
+
+  /** Un tramo que sale de partir un caño conserva su spec, línea, descripción y bloque PCF de origen */
+  private inheritPipeIdentity(from: Component, to: Component): void {
+    to.specCode = from.specCode;
+    const p = from.parameters;
+    if (p.description) to.parameters.description = p.description;
+    if (p.lineNumber) to.parameters.lineNumber = p.lineNumber;
+    if (p.itemCode) to.parameters.itemCode = p.itemCode;
+    if (p.pcf) to.parameters.pcf = p.pcf;
   }
 
   /**
@@ -1121,24 +1080,27 @@ export class PipingGraph {
       const cutLen = comp.parameters.cutLength || 0;
       const desc = comp.parameters.description || `${comp.type} ND ${nd}"`;
       addItem(comp.type, nd, desc, 1, cutLen);
+    }
 
-      // Regla P3dJoint (Autodesk.ProcessPower.P3dConnectionManager):
-      // Bridas (FLANGE) requieren 1 Junta (Gasket) + 1 Juego de Espárragos (BoltSet).
-      // Válvulas bridadas (VALVE) requieren 2 Juntas + 2 Juegos de Espárragos (1 por cada cara bridada).
-      if (comp.type === 'FLANGE' || comp.type === 'VALVE') {
-        const flangedFaces = comp.type === 'VALVE' ? 2 : 1;
-        const defaultBolts = comp.parameters.boltCount || comp.parameters.boltHoles || (nd >= 4 ? 8 : 4);
-        const defaultBoltSize = comp.parameters.boltSize || (nd >= 4 ? '5/8"' : '1/2"');
-
-        const gasketDesc =
-          comp.parameters.gasketDescription || `GASKET, 150 LB, CS/PTFE ASME B16.21 ND ${nd}"`;
-        const boltDesc =
-          comp.parameters.boltSetDescription ||
-          `BOLT SET, RF, 150 LB (${defaultBolts}x ${defaultBoltSize} Stud Bolt ASTM A193 B7)`;
-
-        addItem('GASKET', nd, gasketDesc, flangedFaces, 0);
-        addItem('BOLT_SET', nd, boltDesc, flangedFaces, 0);
-      }
+    // Juntas y bulones: uno por cada unión bridada (regla Flanged / Lug / Wafer de Plant 3D)
+    for (const joint of this.joints.values()) {
+      if (joint.type !== 'FLANGED') continue;
+      const pa = this.ports.get(joint.portAId);
+      const pb = this.ports.get(joint.portBId);
+      const comps = [pa, pb].map((pp) => (pp ? this.components.get(pp.componentId) : undefined));
+      const src = comps.find((c) => c?.parameters.gasketDescription) || comps.find(Boolean);
+      const nd = pa?.nominalDiameter || pb?.nominalDiameter || src?.parameters.nominalDiameter || 2;
+      const cls = pa?.pressureClass || pb?.pressureClass || '150';
+      const bolts = src?.parameters.boltCount || (nd >= 4 ? 8 : 4);
+      const boltSize = src?.parameters.boltSize || (nd >= 4 ? '5/8"' : '1/2"');
+      addItem('GASKET', nd, src?.parameters.gasketDescription || `GASKET ${cls} LB ND ${nd}" (genérica)`, 1, 0);
+      addItem(
+        'BOLT_SET',
+        nd,
+        src?.parameters.boltSetDescription || `BOLT SET ${cls} LB (${bolts}x ${boltSize}, genérico)`,
+        1,
+        0
+      );
     }
 
     return Array.from(map.values());
@@ -1157,10 +1119,14 @@ export class PipingGraph {
       const joint = this.joints.get(port.connectedJointId);
       if (joint) {
         if (joint.type === 'THREADED') return 'Roscado';
-        if (joint.type === 'SOCKETWELD') return 'Plano';
+        // Socket, slip-on, pegado y termofusión llevan el caño con extremo plano
+        if (joint.type === 'SOCKETWELD' || joint.type === 'SLIPON' || joint.type === 'GLUE' || joint.type === 'FUSION') return 'Plano';
         if (joint.type === 'BUTTWELD') return 'Bisel';
       }
     }
+    const pe = (port.plantEndType || '').toUpperCase();
+    if (pe === 'PL' || pe === 'PPL') return 'Plano';
+    if (pe.startsWith('THD')) return 'Roscado';
     return port.connectedJointId ? 'Bisel' : 'Plano';
   }
 
@@ -1281,6 +1247,8 @@ export class PipingGraph {
           wallThickness: p.wallThickness,
           schedule: p.schedule,
           endType: p.endType,
+          plantEndType: p.plantEndType,
+          pressureClass: p.pressureClass,
           connectedJointId: p.connectedJointId
         })),
         centerline: comp.centerline.map(c => [c.x, c.y, c.z]),
@@ -1295,7 +1263,11 @@ export class PipingGraph {
         type: j.type,
         portAId: j.portAId,
         portBId: j.portBId,
-        position: [j.position.x, j.position.y, j.position.z]
+        position: [j.position.x, j.position.y, j.position.z],
+        gapMm: j.gapMm,
+        plantJoint: j.plantJoint,
+        fieldWeld: j.fieldWeld,
+        fieldAllowanceMm: j.fieldAllowanceMm
       };
     }
 
@@ -1305,7 +1277,9 @@ export class PipingGraph {
       currentNominalDiameter: this.currentNominalDiameter,
       currentSchedule: this.currentSchedule,
       components: serializedComponents,
-      joints: serializedJoints
+      joints: serializedJoints,
+      activeLineNumber: this.activeLineNumber,
+      pcf: this.pcfInfo
     };
   }
 
@@ -1320,6 +1294,8 @@ export class PipingGraph {
     this.activeSpec = state.activeSpec;
     this.currentNominalDiameter = state.currentNominalDiameter;
     this.currentSchedule = state.currentSchedule;
+    if (state.activeLineNumber) this.activeLineNumber = state.activeLineNumber;
+    this.pcfInfo = state.pcf;
 
     for (const sComp of Object.values(state.components)) {
       const comp: Component = {
@@ -1339,6 +1315,8 @@ export class PipingGraph {
             wallThickness: sp.wallThickness,
             schedule: sp.schedule,
             endType: sp.endType,
+            plantEndType: sp.plantEndType,
+            pressureClass: sp.pressureClass,
             connectedJointId: sp.connectedJointId
           };
           this.ports.set(port.id, port);
@@ -1356,7 +1334,11 @@ export class PipingGraph {
         type: sJ.type,
         portAId: sJ.portAId,
         portBId: sJ.portBId,
-        position: new THREE.Vector3(...sJ.position)
+        position: new THREE.Vector3(...sJ.position),
+        gapMm: sJ.gapMm,
+        plantJoint: sJ.plantJoint,
+        fieldWeld: sJ.fieldWeld,
+        fieldAllowanceMm: sJ.fieldAllowanceMm
       };
       this.joints.set(joint.id, joint);
     }

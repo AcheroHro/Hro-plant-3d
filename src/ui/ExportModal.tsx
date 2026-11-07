@@ -3,6 +3,7 @@ import { usePipingStore } from '../store/usePipingStore';
 import { PcfExporter } from '../core/exporters/PcfExporter';
 import { DxfExporter, DxfViewType } from '../core/exporters/DxfExporter';
 import { downloadFile } from '../utils/fileDownloader';
+import { DrawingsSection } from './DrawingsSection';
 
 interface ExportModalProps {
   isOpen: boolean;
@@ -18,6 +19,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
   const [dxfView, setDxfView] = useState<DxfViewType>('ISO');
   const [lineRef, setLineRef] = useState<string>(activeLineNumber || 'LINE-101');
   const [boreUnits, setBoreUnits] = useState<'INCH' | 'MM'>('INCH');
+  const [pcfTarget, setPcfTarget] = useState<'plant' | 'isogen'>('plant');
   const [includeWelds, setIncludeWelds] = useState<boolean>(true);
   const [includeMaterials, setIncludeMaterials] = useState<boolean>(true);
   const [showPcfPreview, setShowPcfPreview] = useState<boolean>(false);
@@ -35,19 +37,26 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
       pipelineReference: lineRef,
       projectIdentifier: 'ACHERO_PLANT_3D',
       boreUnits,
+      target: pcfTarget,
       includeWeldsAndFasteners: includeWelds,
       includeMaterialsTable: includeMaterials
     });
-  }, [isOpen, graph, version, lineRef, boreUnits, includeWelds, includeMaterials]);
+  }, [isOpen, graph, version, lineRef, boreUnits, pcfTarget, includeWelds, includeMaterials]);
+
+  // Modelo que vino de un PCF: la unidad de diámetros es la del archivo original
+  const pcfSource = graph.pcfInfo;
+  const effectiveBore = pcfSource?.boreUnits ?? boreUnits;
 
   if (!isOpen) return null;
 
   const safeBaseName = (lineRef || 'line_101').replace(/[^a-zA-Z0-9_-]/g, '_').toLowerCase();
 
+  const pcfFileName = pcfTarget === 'plant' ? `${safeBaseName}.pcf` : `${safeBaseName}_isogen.pcf`;
+
   const handleExportPcf = () => {
-    downloadFile(`${safeBaseName}_isogen.pcf`, pcfPreviewContent, 'text/plain');
+    downloadFile(pcfFileName, pcfPreviewContent, 'text/plain');
     usePipingStore.setState({
-      statusMessage: `Archivo PCF exportado: ${safeBaseName}_isogen.pcf (${graph.components.size} piezas).`
+      statusMessage: `Archivo PCF exportado: ${pcfFileName} (${graph.components.size} piezas).`
     });
   };
 
@@ -82,7 +91,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm select-none">
-      <div className="w-full max-w-lg bg-[#1e2128] border border-[#3a3f4d] rounded-xl shadow-2xl overflow-hidden flex flex-col">
+      <div className="w-full max-w-2xl bg-[#1e2128] border border-[#3a3f4d] rounded-xl shadow-2xl overflow-hidden flex flex-col">
         {/* Cabecera estilo AutoCAD Plant 3D Production Iso */}
         <div className="h-14 px-5 bg-[#252830] border-b border-[#3a3f4d] flex items-center justify-between">
           <div className="flex items-center space-x-2.5">
@@ -91,7 +100,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
             </span>
             <div>
               <h3 className="font-bold text-sm text-slate-100">
-                Exportar Isométrico (.PCF) y Plano CAD (.DXF)
+                Planos PDF, PCF y DXF
               </h3>
               <p className="text-[10px] text-slate-400 font-mono">
                 Spec: {specCode} • {compCount} piezas • {jointCount} uniones • Rev {version}
@@ -123,19 +132,45 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
             />
           </div>
 
+          {/* Planos isométricos en PDF (línea y spools) */}
+          <DrawingsSection lineRef={lineRef} />
+
           {/* Opción 1: Exportar Isométrico PCF (PnPIsoPCFWriter / Isogen compatible) */}
           <div className="bg-[#252830] border border-[#0696d7]/60 rounded-lg p-4 shadow-sm">
             <div className="flex items-center justify-between mb-2">
               <span className="font-bold text-slate-100 flex items-center space-x-1.5">
                 <span>📄</span>
-                <span>Archivo de Tubería Isogen (.PCF)</span>
+                <span>Archivo de Tubería (.PCF)</span>
               </span>
               <span className="text-[10px] bg-[#0696d7]/20 text-[#38bdf8] font-mono font-bold px-2 py-0.5 rounded border border-[#0696d7]/40">
-                PLANTPCFTOISO • IDA Y VUELTA
+                {pcfTarget === 'plant' ? 'PCF TO PIPE • PLANT 3D 2027' : 'ISOGEN'}
               </span>
             </div>
+            <div className="grid grid-cols-2 gap-1 mb-2">
+              {(['plant', 'isogen'] as const).map((t) => (
+                <button
+                  key={t}
+                  type="button"
+                  onClick={() => setPcfTarget(t)}
+                  className={`h-8 rounded text-[11px] font-bold border transition-all ${
+                    pcfTarget === t ? 'bg-[#0696d7] text-white border-[#38bdf8]' : 'bg-[#232832] text-slate-400 border-[#343b48]'
+                  }`}
+                >
+                  {t === 'plant' ? 'Volver a Plant 3D' : 'Isogen completo'}
+                </button>
+              ))}
+            </div>
             <p className="text-[11px] text-slate-400 leading-relaxed mb-3">
-              Exporta toda la tubería trazada (niples con su tag y bisel, codos, tees, bridas, válvulas, reducciones, soldaduras y materiales) en formato <strong className="text-slate-200">.PCF</strong> compatible con <code className="text-[#38bdf8] font-mono">PLANTPCFTOISO</code> de AutoCAD Plant 3D o para volver a abrirlo en la app.
+              {pcfTarget === 'plant' ? (
+                <>
+                  Para cargar en Plant 3D 2027 con <code className="text-[#38bdf8] font-mono">PCF to Pipe</code>: una spec por pieza, CRLF, sin soldaduras ni juntas (Plant las agrega).
+                  {pcfSource
+                    ? ' Las piezas que vinieron del PCF y no se tocaron salen igual que en el archivo; las movidas cambian solo sus coordenadas.'
+                    : ''}
+                </>
+              ) : (
+                <>Con soldaduras, juntas, bulones, tabla MATERIALS y los datos de taller de cada niple (tag y bisel), para Isogen o para volver a abrirlo en la app.</>
+              )}
             </p>
 
             {/* Opciones de Formato PCF */}
@@ -147,20 +182,22 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
                 <div className="grid grid-cols-2 gap-1">
                   <button
                     type="button"
+                    disabled={!!pcfSource}
                     onClick={() => setBoreUnits('INCH')}
                     className={`h-7 rounded font-mono text-[10px] font-bold border transition-all ${
-                      boreUnits === 'INCH'
+                      effectiveBore === 'INCH'
                         ? 'bg-[#0696d7] text-white border-[#38bdf8]'
                         : 'bg-[#232832] text-slate-400 border-[#343b48]'
                     }`}
                   >
-                    INCH (2.00")
+                    INCH (2")
                   </button>
                   <button
                     type="button"
+                    disabled={!!pcfSource}
                     onClick={() => setBoreUnits('MM')}
                     className={`h-7 rounded font-mono text-[10px] font-bold border transition-all ${
-                      boreUnits === 'MM'
+                      effectiveBore === 'MM'
                         ? 'bg-[#0696d7] text-white border-[#38bdf8]'
                         : 'bg-[#232832] text-slate-400 border-[#343b48]'
                     }`}
@@ -170,6 +207,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
                 </div>
               </div>
 
+              {pcfTarget === 'isogen' && (
               <div className="flex flex-col justify-center space-y-1.5 pl-1">
                 <label className="flex items-center space-x-2 cursor-pointer text-[10px] text-slate-300">
                   <input
@@ -190,6 +228,12 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
                   <span>Incluir Tabla MATERIALS al pie</span>
                 </label>
               </div>
+              )}
+              {pcfSource && (
+                <p className="text-[10px] text-slate-400 sm:col-span-2">
+                  Modelo leído de {pcfSource.sourceName ? `"${pcfSource.sourceName}"` : 'un PCF'}: se respeta su cabecera y su unidad ({pcfSource.boreUnits}).
+                </p>
+              )}
             </div>
 
             {/* Botones de Acción PCF */}

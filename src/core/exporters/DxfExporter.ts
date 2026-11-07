@@ -301,6 +301,17 @@ export class DxfExporter {
         case 'CAP':
           DxfExporter.renderCap2D(lines, comp, view, sheetOffset);
           break;
+        default: {
+          // Olets, instrumentos, cuplas y cruces importados de PCF: su eje (el detalle va en la fase de planos)
+          const pts = comp.type === 'CROSS' && comp.centerline.length >= 3
+            ? comp.ports.flatMap((p) => [comp.centerline[1], p.position])
+            : comp.centerline;
+          for (let i = 0; i + 1 < pts.length; i += comp.type === 'CROSS' ? 2 : 1) {
+            const a = DxfExporter.projectPoint(pts[i], view, sheetOffset);
+            const b = DxfExporter.projectPoint(pts[i + 1], view, sheetOffset);
+            DxfExporter.addLine(lines, '0', a.x, a.y, b.x, b.y);
+          }
+        }
       }
     }
   }

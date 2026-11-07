@@ -117,6 +117,10 @@ export function detectPipingCollisions(graph: PipingGraph): CollisionResult {
       if (areComponentsDirectlyConnected(compA, compB, graph)) {
         continue;
       }
+      // Dos caños a los lados del mismo accesorio (codo SW corto, tee) se acercan por geometría, no chocan
+      if (shareConnectedFitting(compA, compB, graph)) {
+        continue;
+      }
 
       const odA = compA.parameters.outerDiameter;
       const odB = compB.parameters.outerDiameter;
@@ -148,6 +152,25 @@ export function detectPipingCollisions(graph: PipingGraph): CollisionResult {
     collidingComponentIds: collidingIds,
     details
   };
+}
+
+function connectedComponentIds(comp: Component, graph: PipingGraph): Set<string> {
+  const ids = new Set<string>();
+  for (const port of comp.ports) {
+    const joint = port.connectedJointId ? graph.joints.get(port.connectedJointId) : undefined;
+    if (!joint) continue;
+    const otherPort = graph.ports.get(joint.portAId === port.id ? joint.portBId : joint.portAId);
+    if (otherPort) ids.add(otherPort.componentId);
+  }
+  return ids;
+}
+
+function shareConnectedFitting(compA: Component, compB: Component, graph: PipingGraph): boolean {
+  const a = connectedComponentIds(compA, graph);
+  for (const id of connectedComponentIds(compB, graph)) {
+    if (a.has(id) && graph.components.get(id)?.type !== 'PIPE') return true;
+  }
+  return false;
 }
 
 function areComponentsDirectlyConnected(

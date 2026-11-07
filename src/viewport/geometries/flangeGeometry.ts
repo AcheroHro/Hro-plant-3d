@@ -19,17 +19,19 @@ export function createFlangeGeometry(
   wallThickness: number,
   faceToFace: number,
   _boltCircle: number = 0,
-  _boltHoles: number = 4
+  _boltHoles: number = 4,
+  dims: { flangeThickness?: number; hubDiameter?: number } = {}
 ): THREE.BufferGeometry {
   const rPipe = Math.max(1, pipeOD / 2);
   const rIn = Math.max(0.5, rPipe - Math.max(0.1, wallThickness));
   const rFlange = Math.max(rPipe + 10, flangeOD / 2);
-  const L = Math.max(20, faceToFace);
+  const hasSpecDims = dims.flangeThickness !== undefined && dims.flangeThickness > 0;
+  const L = hasSpecDims ? Math.max(faceToFace, dims.flangeThickness!) : Math.max(20, faceToFace);
 
-  // Proporciones geométricas según norma ASME B16.5
-  const hubLength = L * 0.55;
-  const flangeThickness = L * 0.35;
-  const raisedFaceThickness = L * 0.10;
+  // Con medidas de la spec: espesor real del disco (B) y cuello hasta completar el largo (L)
+  const raisedFaceThickness = hasSpecDims ? Math.min(1.6, dims.flangeThickness! * 0.1) : L * 0.1;
+  const flangeThickness = hasSpecDims ? dims.flangeThickness! - raisedFaceThickness : L * 0.35;
+  const hubLength = hasSpecDims ? Math.max(0, L - dims.flangeThickness!) : L * 0.55;
   const rRaisedFace = (rPipe + rFlange) * 0.5;
 
   // Puntos del perfil longitudinal (R, Z) para LatheGeometry

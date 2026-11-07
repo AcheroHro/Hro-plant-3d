@@ -1,4 +1,4 @@
-const CACHE_NAME = 'achero-plant-3d-v1';
+const CACHE_NAME = 'achero-plant-3d-v2';
 const PRECACHE_URLS = [
   '/',
   '/index.html',
@@ -45,6 +45,7 @@ self.addEventListener('fetch', (event) => {
           networkResponse.status === 200 &&
           (event.request.url.includes('.wasm') ||
            event.request.url.includes('.pspc') ||
+           event.request.url.includes('.pspx') ||
            event.request.url.includes('/assets/'))
         ) {
           const responseToCache = networkResponse.clone();

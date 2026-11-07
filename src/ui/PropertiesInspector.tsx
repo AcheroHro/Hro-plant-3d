@@ -370,6 +370,33 @@ export const PropertiesInspector: React.FC = () => {
                         {selectedComp.parameters.description}
                       </span>
                     )}
+                    {(selectedComp.parameters.skey || selectedComp.ports.some((p) => p.plantEndType)) && (
+                      <div className="flex justify-between text-slate-300">
+                        <span className="text-slate-400">SKEY / extremos:</span>
+                        <span className="font-bold text-slate-200">
+                          {selectedComp.parameters.skey || '—'} •{' '}
+                          {selectedComp.ports.map((p) => p.plantEndType || p.endType).join('/')}
+                        </span>
+                      </div>
+                    )}
+                    {selectedComp.parameters.geometryConfidence && (
+                      <span
+                        className={`text-[9px] ${
+                          selectedComp.parameters.geometryConfidence === 'verified'
+                            ? 'text-emerald-400'
+                            : selectedComp.parameters.geometryConfidence === 'standard'
+                            ? 'text-sky-300'
+                            : 'text-amber-400'
+                        }`}
+                        title={selectedComp.parameters.geometryNote}
+                      >
+                        {selectedComp.parameters.geometryConfidence === 'verified'
+                          ? '✓ Puertos verificados con Plant 3D'
+                          : selectedComp.parameters.geometryConfidence === 'standard'
+                          ? '≈ Puertos según norma, sin verificar en Plant'
+                          : `! Geometría aproximada${selectedComp.parameters.geometryNote ? `: ${selectedComp.parameters.geometryNote}` : ''}`}
+                      </span>
+                    )}
                   </div>
                 )}
               </div>

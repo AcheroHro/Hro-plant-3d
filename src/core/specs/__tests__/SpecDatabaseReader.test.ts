@@ -69,15 +69,12 @@ describe('SpecDatabaseReader - Ingesta de Catálogo y Consultas SQL', () => {
     expect(diameters).toContain(4);
   });
 
-  it('Debe exportar el binario SQLite y permitir re-instanciar un nuevo lector desde el buffer', async () => {
-    const binary = reader.exportBinary();
-    expect(binary.length).toBeGreaterThan(1000);
-
-    const reloadedReader = await SpecDatabaseReader.create(binary);
-    const pipe3 = reloadedReader.findPipe(3, 'CS150');
+  it('Debe reconstruir el lector desde el JSON de la spec (caché offline)', () => {
+    const copy = SpecDatabaseReader.fromCatalogData(JSON.parse(JSON.stringify(reader.catalog.data)));
+    const pipe3 = copy.findPipe(3, 'CS150');
     expect(pipe3).not.toBeNull();
     expect(pipe3?.outerDiameter).toBeCloseTo(88.9, 1);
-    reloadedReader.close();
+    expect(copy.isNativePlant3D).toBe(false);
   });
 
   it('Debe cargar e interpretar correctamente el archivo real RCI1.pspc de AutoCAD Plant 3D', async () => {

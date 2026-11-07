@@ -9,6 +9,9 @@ import { createReducerGeometry } from './geometries/reducerGeometry';
 import { createValveGeometry } from './geometries/valveGeometry';
 import { createCapGeometry } from './geometries/capGeometry';
 import { disposeObject } from './geometries/geometryUtils';
+import { computeSpools } from '../core/spools/spoolEngine';
+import { SPOOL_COLORS, ERECTION_COLOR } from './spoolColors';
+import { isFaceEnd } from '../core/graph/PipingGraph';
 import { findScreenMagneticSnap } from './snapping/magneticSnap';
 
 // Configurar orientación industrial estándar Z-Up globalmente
@@ -27,6 +30,7 @@ export const CanvasViewer: React.FC = () => {
   const activeDirection = usePipingStore((s) => s.activeDirection);
   const numpadValue = usePipingStore((s) => s.numpadValue);
   const collidingComponentIds = usePipingStore((s) => s.collidingComponentIds);
+  const spoolView = usePipingStore((s) => s.spoolView);
   const triggerFrameAll = usePipingStore((s) => s.triggerFrameAll);
   const setSnappedPortId = usePipingStore((s) => s.setSnappedPortId);
   const selectPortAndAlign = usePipingStore((s) => s.selectPortAndAlign);
@@ -213,7 +217,9 @@ export const CanvasViewer: React.FC = () => {
 
   useEffect(() => {
     if (triggerFrameAll > 0) {
-      executeFrameAll();
+      // Después de reconstruir las mallas (al importar un PCF el modelo nuevo todavía no está dibujado)
+      const id = requestAnimationFrame(() => executeFrameAll());
+      return () => cancelAnimationFrame(id);
     }
   }, [triggerFrameAll]);
 
@@ -296,6 +302,7 @@ export const CanvasViewer: React.FC = () => {
       side: THREE.DoubleSide
     });
 
+    const fieldWeldMaterial = new THREE.MeshStandardMaterial({ color: 0xf97316, emissive: 0x7c2d12, emissiveIntensity: 0.5, roughness: 0.4 });
     const weldBeadMaterial = new THREE.MeshStandardMaterial({
       color: 0xf97316,
       roughness: 0.4,
@@ -331,17 +338,34 @@ export const CanvasViewer: React.FC = () => {
       });
     };
 
+    // Vista por spools: un color por spool y gris para el material de montaje
+    const spoolResult = spoolView ? computeSpools(graph) : null;
+    const spoolColorIndex = new Map(spoolResult?.spools.map((sp) => [sp.id, sp.colorIndex]) ?? []);
+    const spoolMats = new Map<number, THREE.Material>();
+    const spoolMaterial = (compId: string): THREE.Material | null => {
+      if (!spoolResult) return null;
+      const sid = spoolResult.spoolOf.get(compId);
+      const color = sid ? SPOOL_COLORS[(spoolColorIndex.get(sid) ?? 0) % SPOOL_COLORS.length] : ERECTION_COLOR;
+      let m = spoolMats.get(color);
+      if (!m) {
+        m = new THREE.MeshStandardMaterial({ color, roughness: 0.45, metalness: 0.3, side: THREE.DoubleSide });
+        spoolMats.set(color, m);
+      }
+      return m;
+    };
+
     // 1. Construir geometrías para cada componente
     for (const comp of graph.components.values()) {
       const isColliding = collidingComponentIds.has(comp.id);
       const isSelected = comp.id === selectedComponentId;
+      const spoolMat = spoolMaterial(comp.id);
       const { outerDiameter, wallThickness, cutLength, angle, radius, runTakeOff, branchTakeOff, faceToFace, boltCircle, boltHoles } =
         comp.parameters;
 
       const pickMat = (defaultMat: THREE.Material) => {
         if (isSelected) return selectedMaterial;
         if (isColliding) return collisionMaterial;
-        return defaultMat;
+        return spoolMat ?? defaultMat;
       };
 
       if (comp.type === 'PIPE' && comp.centerline.length >= 2) {
@@ -376,39 +400,31 @@ export const CanvasViewer: React.FC = () => {
 
         tagComponentMesh(mesh, comp.id);
         pipeGroup.add(mesh);
-      } else if (comp.type === 'FLANGE') {
+      } else if (comp.type === 'FLANGE' && comp.ports.length >= 2) {
+        // Brida con sus medidas de spec: la cara en el puerto de cara y el cuerpo hacia el caño
         const mat = pickMat(flangeMaterial);
+        const vis = comp.parameters.visual;
+        const facePort = comp.ports.find((p) => isFaceEnd(p)) ?? comp.ports[1];
+        const pipePort = comp.ports.find((p) => p !== facePort) ?? comp.ports[0];
+        const overall =
+          vis?.bodyEnd !== undefined && vis?.bodyStart !== undefined
+            ? Math.max(1, vis.bodyEnd - vis.bodyStart)
+            : faceToFace || 63.5;
         const geom = createFlangeGeometry(
-          outerDiameter,
-          comp.ports[0]?.outerDiameter ? comp.ports[0].outerDiameter * 1.5 : outerDiameter * 1.5,
+          pipePort.outerDiameter || outerDiameter,
+          vis?.flangeOuterDiameter ?? outerDiameter * 2,
           wallThickness,
-          faceToFace || 63.5,
+          overall,
           boltCircle,
-          boltHoles
+          boltHoles,
+          { flangeThickness: vis?.flangeThickness, hubDiameter: vis?.hubDiameter }
         );
         const mesh = new THREE.Mesh(geom, mat);
-        const start = comp.centerline[0] || comp.ports[0]?.position;
-        const end = comp.centerline[1] || comp.ports[1]?.position;
-        if (start && end) {
-          const vDir = new THREE.Vector3().subVectors(end, start).normalize();
-          const quat = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), vDir);
-          mesh.position.copy(start);
-          mesh.quaternion.copy(quat);
-
-          // Anillo visual de Junta Espirometálica (GasketSubPart P3dJoint)
-          const gasketGeom = new THREE.CylinderGeometry(
-            outerDiameter * 0.68,
-            outerDiameter * 0.68,
-            3.2,
-            24
-          );
-          gasketGeom.rotateX(Math.PI / 2);
-          const gasketMesh = new THREE.Mesh(gasketGeom, gasketBoltMaterial);
-          gasketMesh.position.copy(end);
-          gasketMesh.quaternion.copy(quat);
-          tagComponentMesh(gasketMesh, comp.id);
-          pipeGroup.add(gasketMesh);
-        }
+        let dir = facePort.position.clone().sub(pipePort.position);
+        if (dir.lengthSq() < 1e-6) dir = facePort.direction.clone();
+        dir.normalize();
+        mesh.position.copy(facePort.position.clone().addScaledVector(dir, -overall));
+        mesh.quaternion.copy(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), dir));
         tagComponentMesh(mesh, comp.id);
         pipeGroup.add(mesh);
       } else if (comp.type === 'TEE') {
@@ -484,16 +500,6 @@ export const CanvasViewer: React.FC = () => {
           mesh.position.copy(start);
           mesh.quaternion.copy(quat);
 
-          // Anillos de Junta y Espárragos P3dJoint en ambas caras de la válvula
-          for (const pt of [start, end]) {
-            const gGeom = new THREE.CylinderGeometry(outerDiameter * 0.72, outerDiameter * 0.72, 3.5, 24);
-            gGeom.rotateX(Math.PI / 2);
-            const gMesh = new THREE.Mesh(gGeom, gasketBoltMaterial);
-            gMesh.position.copy(pt);
-            gMesh.quaternion.copy(quat);
-            tagComponentMesh(gMesh, comp.id);
-            pipeGroup.add(gMesh);
-          }
         }
         tagComponentMesh(mesh, comp.id);
         pipeGroup.add(mesh);
@@ -511,6 +517,34 @@ export const CanvasViewer: React.FC = () => {
         }
         tagComponentMesh(mesh, comp.id);
         pipeGroup.add(mesh);
+      } else if (['OLET', 'INSTRUMENT', 'COUPLING', 'CROSS', 'MISC'].includes(comp.type)) {
+        // Piezas que llegan de un PCF: cuerpos cilíndricos entre los puntos de su eje
+        const mat = pickMat(comp.type === 'INSTRUMENT' ? valveMaterial : comp.type === 'CROSS' ? teeMaterial : fittingMaterial);
+        const group = new THREE.Group();
+        const pts = comp.centerline.length >= 2 ? comp.centerline : comp.ports.map((p) => p.position);
+        const segments: [THREE.Vector3, THREE.Vector3, number][] = [];
+        if (comp.type === 'CROSS' && pts.length >= 3) {
+          const c = pts[1];
+          comp.ports.forEach((p) => segments.push([c, p.position, p.outerDiameter]));
+        } else if (comp.type === 'OLET') {
+          segments.push([pts[0], pts[pts.length - 1], comp.ports[0]?.outerDiameter * 1.25 || outerDiameter]);
+        } else {
+          const scale = comp.type === 'INSTRUMENT' ? 1.6 : comp.type === 'COUPLING' ? 1.3 : 1.15;
+          for (let i = 0; i + 1 < Math.min(pts.length, comp.ports.length || pts.length); i++) {
+            segments.push([pts[i], pts[i + 1], (comp.ports[i]?.outerDiameter || outerDiameter) * scale]);
+          }
+        }
+        for (const [a, b, d] of segments) {
+          const len = a.distanceTo(b);
+          if (len < 0.01) continue;
+          const geom = new THREE.CylinderGeometry(d / 2, d / 2, len, 24);
+          const m = new THREE.Mesh(geom, mat);
+          m.position.copy(a.clone().lerp(b, 0.5));
+          m.quaternion.copy(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), b.clone().sub(a).normalize()));
+          group.add(m);
+        }
+        tagComponentMesh(group, comp.id);
+        pipeGroup.add(group);
       }
     }
 
@@ -518,14 +552,26 @@ export const CanvasViewer: React.FC = () => {
     for (const joint of graph.joints.values()) {
       const portA = graph.ports.get(joint.portAId);
       if (portA) {
-        const ringR = (portA.outerDiameter || 60.3) / 2;
-        const beadGeom = new THREE.TorusGeometry(ringR + 1.5, 2.5, 10, 24);
-        const beadMat = joint.type === 'FLANGED' ? gasketBoltMaterial : weldBeadMaterial;
-        const beadMesh = new THREE.Mesh(beadGeom, beadMat);
-        beadMesh.position.copy(joint.position);
         const quat = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), portA.direction);
-        beadMesh.quaternion.copy(quat);
-        pipeGroup.add(beadMesh);
+        if (joint.type === 'FLANGED') {
+          const thickness = Math.max(1, joint.gapMm ?? 1.6);
+          const gGeom = new THREE.CylinderGeometry((portA.outerDiameter || 60.3) * 0.8, (portA.outerDiameter || 60.3) * 0.8, thickness, 28);
+          gGeom.rotateX(Math.PI / 2);
+          const gMesh = new THREE.Mesh(gGeom, gasketBoltMaterial);
+          gMesh.position.copy(joint.position);
+          gMesh.quaternion.copy(quat);
+          pipeGroup.add(gMesh);
+        } else {
+          // Soldadura de campo: anillo naranja más grueso (corta el spool)
+          const ringR = (portA.outerDiameter || 60.3) / 2;
+          const beadGeom = joint.fieldWeld
+            ? new THREE.TorusGeometry(ringR + 6, 6, 10, 24)
+            : new THREE.TorusGeometry(ringR + 1.5, 2.5, 10, 24);
+          const beadMesh = new THREE.Mesh(beadGeom, joint.fieldWeld ? fieldWeldMaterial : weldBeadMaterial);
+          beadMesh.position.copy(joint.position);
+          beadMesh.quaternion.copy(quat);
+          pipeGroup.add(beadMesh);
+        }
       }
     }
 
@@ -663,7 +709,7 @@ export const CanvasViewer: React.FC = () => {
       const arrowHelper = new THREE.ArrowHelper(arrowDir, activePort.position, Math.min(260, lenMm), 0x22c55e, 52, 32);
       cursorGroup.add(arrowHelper);
     }
-  }, [graph, version, collidingComponentIds, selectedPortId, selectedComponentId, activeDirection, numpadValue]);
+  }, [graph, version, collidingComponentIds, selectedPortId, selectedComponentId, activeDirection, numpadValue, spoolView]);
 
   // Gestos multitáctiles y selección 3D CAD:
   // - Tap corto (< 8px): Selecciona puerto abierto (boca/ramal) o selecciona cañería/accesorio en 3D

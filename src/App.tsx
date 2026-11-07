@@ -6,6 +6,7 @@ import { TouchCompass } from './ui/TouchCompass';
 import { TouchNumpad } from './ui/TouchNumpad';
 import { ReticleCrosshair } from './ui/ReticleCrosshair';
 import { BomModal } from './ui/BomModal';
+import { SpoolsModal } from './ui/SpoolsModal';
 import { ExportModal } from './ui/ExportModal';
 import { ToolPaletteModal } from './ui/ToolPaletteModal';
 import { QuickToolPalette } from './ui/QuickToolPalette';
@@ -53,6 +54,7 @@ export default function App() {
 
       {/* Modal de Cómputo de Materiales (BOM) */}
       <BomModal />
+      <SpoolsModal />
 
       {/* Modal de Exportación de Entregables CAD (PCF y DXF) */}
       <ExportModal isOpen={isExportOpen} onClose={toggleExport} />

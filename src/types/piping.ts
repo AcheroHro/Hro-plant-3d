@@ -12,7 +12,12 @@ export type ComponentType =
   | 'REDUCER'
   | 'CAP'
   | 'GASKET'
-  | 'BOLT_SET';
+  | 'BOLT_SET'
+  | 'CROSS'
+  | 'OLET'
+  | 'COUPLING'
+  | 'INSTRUMENT'
+  | 'MISC';
 
 /**
  * Tipos de extremos de conexión física según normas ASME / AutoCAD Plant 3D
@@ -27,7 +32,62 @@ export type NippleEndFinish = 'Bisel' | 'Plano' | 'Roscado';
 /**
  * Tipos de juntas entre componentes
  */
-export type JointType = 'BUTTWELD' | 'SOCKETWELD' | 'THREADED' | 'FLANGED' | 'GASKET';
+export type JointType =
+  | 'BUTTWELD'
+  | 'SOCKETWELD'
+  | 'THREADED'
+  | 'FLANGED'
+  | 'GASKET'
+  | 'SLIPON'
+  | 'GLUE'
+  | 'FUSION'
+  | 'CLAMP'
+  | 'CONTINUOUS';
+
+/** Confianza en la ubicación de los puertos según la plantilla de Plant 3D */
+export type GeometryConfidence = 'verified' | 'standard' | 'approximate';
+
+/** Medidas para dibujar una pieza (mm) */
+export interface PartVisualDims {
+  bodyStart?: number;
+  bodyEnd?: number;
+  flangeOuterDiameter?: number;
+  flangeThickness?: number;
+  hubDiameter?: number;
+  bodyDiameter?: number;
+  actuatorHeight?: number;
+}
+
+/** Línea de un bloque PCF tal como venía en el archivo */
+export interface PcfSourceLine {
+  /** Línea original completa (con su sangría) */
+  raw: string;
+  key: string;
+  /**
+   * Línea de geometría: de dónde sale el punto al reexportar.
+   * 'P<n>' = puerto n, 'L<n>' = punto n de centerline, 'C' = centro calculado del codo.
+   */
+  ref?: string;
+  /** Coordenadas leídas (para saber si la pieza se movió) */
+  xyz?: [number, number, number];
+  /** Lo que sigue a las coordenadas (diámetro y extremo), tal cual */
+  tail?: string;
+}
+
+/** Bloque PCF de origen de un componente importado: permite reexportarlo sin pérdidas */
+export interface PcfSourceBlock {
+  type: string;
+  lines: PcfSourceLine[];
+}
+
+/** Datos del PCF importado que no son piezas (cabecera, unidades, fin de línea) */
+export interface PcfGraphInfo {
+  header: string[];
+  boreUnits: 'INCH' | 'MM';
+  sourceName?: string;
+  /** Bloques que no se importaron como piezas (WELD, SUPPORT...), por tipo */
+  skipped?: Record<string, number>;
+}
 
 /**
  * Representación de un puerto de conexión polar de un componente
@@ -53,6 +113,10 @@ export interface Port {
   schedule: string;
   /** Tipo de extremo de la conexión (BW = Soldadura a tope, SW = Socket Weld, etc.) */
   endType: EndType;
+  /** Extremo tal como lo define Plant 3D (BV, PL, FL, SW, SO, THDF...) */
+  plantEndType?: string;
+  /** Clase de presión del puerto (150, 300, 3000...) */
+  pressureClass?: string;
   /** Si el puerto está conectado a una junta */
   connectedJointId?: string;
 }
@@ -120,6 +184,19 @@ export interface Component {
     boltLengthMm?: number;
     /** Número de Línea (Line Number de AutoCAD Plant 3D, ej. "100-CS150-2\"") */
     lineNumber?: string;
+    /** Datos de la pieza de spec de Plant 3D */
+    itemCode?: string;
+    skey?: string;
+    familyId?: string;
+    familyDescription?: string;
+    pressureClass?: string;
+    geometryConfidence?: GeometryConfidence;
+    geometryNote?: string;
+    visual?: PartVisualDims;
+    /** Reducción excéntrica: corrimiento lateral del extremo chico (mm) */
+    lateralOffset?: number;
+    /** Bloque PCF de origen (piezas importadas) */
+    pcf?: PcfSourceBlock;
     /** Identificación del niple para lista de cortes (ej. "N-01") */
     nippleTag?: string;
     /** Tipo de preparación del Extremo 1 del niple (Plano, Bisel, Roscado) */
@@ -143,7 +220,17 @@ export interface Joint {
   portBId: string;
   /** Posición 3D de la junta en el espacio (en mm) */
   position: THREE.Vector3;
+  /** Separación entre caras (espesor de junta) en mm */
+  gapMm?: number;
+  /** Nombre de la regla de unión de Plant 3D (Buttweld, Flanged, Slip...) */
+  plantJoint?: string;
+  /** Soldadura de campo (corta el spool): FW, o FFW con sobrelargo para ajustar en obra */
+  fieldWeld?: FieldWeldKind;
+  /** Sobrelargo (mm) que se deja en el caño para una soldadura FFW */
+  fieldAllowanceMm?: number;
 }
+
+export type FieldWeldKind = 'FW' | 'FFW';
 
 /**
  * Resultado del cálculo geométrico y vectorial para la colocación de un codo
@@ -204,6 +291,24 @@ export interface SpecFitting {
   boltCount?: number;
   boltLengthMm?: number;
   gasketThicknessMm?: number;
+  /** Datos de Plant 3D de la pieza elegida */
+  itemCode?: string;
+  skey?: string;
+  familyId?: string;
+  familyDescription?: string;
+  template?: string;
+  pressureClass?: string;
+  geometryConfidence?: GeometryConfidence;
+  geometryNote?: string;
+  /** Extremos de Plant por puerto, en orden S1, S2, S3 */
+  plantEndTypes?: string[];
+  portNominalDiameters?: number[];
+  portOuterDiameters?: number[];
+  /** Vértice a puerto S2 en codos asimétricos */
+  takeOff2?: number;
+  /** Corrimiento lateral de reducciones excéntricas */
+  lateralOffset?: number;
+  visual?: PartVisualDims;
 }
 
 /**
@@ -217,6 +322,12 @@ export interface FittingQueryCriteria {
   schedule?: string;
   endType?: EndType;
   reducedNominalDiameter?: number;
+  /** Familia de Plant a usar (PartFamilyId) */
+  familyId?: string;
+  /** Extremo de Plant del puerto al que se va a conectar */
+  connectToEndType?: string;
+  pressureClass?: string;
+  eccentric?: boolean;
 }
 
 /**
@@ -233,6 +344,8 @@ export interface SerializedPort {
   wallThickness: number;
   schedule: string;
   endType: EndType;
+  plantEndType?: string;
+  pressureClass?: string;
   connectedJointId?: string;
 }
 
@@ -252,6 +365,10 @@ export interface SerializedJoint {
   portAId: string;
   portBId: string;
   position: [number, number, number];
+  gapMm?: number;
+  plantJoint?: string;
+  fieldWeld?: FieldWeldKind;
+  fieldAllowanceMm?: number;
 }
 
 export interface SerializedGraphState {
@@ -261,4 +378,6 @@ export interface SerializedGraphState {
   currentSchedule: string;
   components: Record<string, SerializedComponent>;
   joints: Record<string, SerializedJoint>;
+  activeLineNumber?: string;
+  pcf?: PcfGraphInfo;
 }

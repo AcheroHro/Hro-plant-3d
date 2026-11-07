@@ -78,9 +78,11 @@ describe('DxfExporter - Exportación 2D Ortogonal AutoCAD DXF', () => {
     const flg = graph.addFlange(routed.outgoingPipe.ports[1], flangeSpec, gasketSpec, boltSetSpec);
     graph.addValve(flg.ports[1], valveSpec, gasketSpec, boltSetSpec);
 
+    // Una sola unión bridada (brida-válvula): 1 junta y 1 juego de bulones.
+    // La cara libre de la válvula no lleva junta hasta que se le conecte algo.
     const bom = graph.calculateBillOfMaterials();
-    expect(bom.some((b) => b.type === 'GASKET' && b.quantity === 3)).toBe(true);
-    expect(bom.some((b) => b.type === 'BOLT_SET' && b.quantity === 3)).toBe(true);
+    expect(bom.filter((b) => b.type === 'GASKET').reduce((n, b) => n + b.quantity, 0)).toBe(1);
+    expect(bom.filter((b) => b.type === 'BOLT_SET').reduce((n, b) => n + b.quantity, 0)).toBe(1);
 
     const cutList = graph.calculatePipeCutList();
     expect(cutList.length).toBe(2);

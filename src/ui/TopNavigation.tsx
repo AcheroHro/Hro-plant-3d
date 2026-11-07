@@ -20,13 +20,14 @@ export const TopNavigation: React.FC = () => {
   const redo = usePipingStore((s) => s.redo);
   const frameAll = usePipingStore((s) => s.frameAll);
   const toggleBom = usePipingStore((s) => s.toggleBom);
+  const toggleSpools = usePipingStore((s) => s.toggleSpools);
   const toggleExport = usePipingStore((s) => s.toggleExport);
   const resetGraph = usePipingStore((s) => s.resetGraph);
   const statusMessage = usePipingStore((s) => s.statusMessage);
   const specReader = usePipingStore((s) => s.specReader);
   const specCode = usePipingStore((s) => s.specCode);
   const graph = usePipingStore((s) => s.graph);
-  const loadPspcFile = usePipingStore((s) => s.loadPspcFile);
+  const loadSpecFiles = usePipingStore((s) => s.loadSpecFiles);
   const loadBuiltInSpec = usePipingStore((s) => s.loadBuiltInSpec);
   const importPcfFile = usePipingStore((s) => s.importPcfFile);
 
@@ -69,11 +70,11 @@ export const TopNavigation: React.FC = () => {
     togglePaletteCollapsed('properties', !palettes.properties.isCollapsed);
   };
 
+  // Spec de Plant: la .pspc (o .pcat) junto con su .pspx y, si está, el DefaultConnectorsConfig.xml del proyecto
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const buffer = await file.arrayBuffer();
-    await loadPspcFile(buffer, file.name);
+    const files = Array.from(e.target.files ?? []);
+    if (files.length === 0) return;
+    await loadSpecFiles(files);
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
@@ -98,9 +99,9 @@ export const TopNavigation: React.FC = () => {
       pipelineReference: refName,
       projectIdentifier: 'ACHERO_PLANT_3D'
     });
-    downloadFile(`${safeFileName}_isogen.pcf`, pcfContent, 'text/plain');
+    downloadFile(`${safeFileName}.pcf`, pcfContent, 'text/plain');
     usePipingStore.setState({
-      statusMessage: `Archivo PCF exportado: ${safeFileName}_isogen.pcf (${graph.components.size} piezas).`
+      statusMessage: `PCF para Plant 3D exportado: ${safeFileName}.pcf (${graph.components.size} piezas). Cargalo con PCF to Pipe.`
     });
   };
 
@@ -143,6 +144,9 @@ export const TopNavigation: React.FC = () => {
               onClick={toggleBom}
             >
               Lista de Cortes / BOM
+            </span>
+            <span className="px-2 py-0.5 text-slate-400 hover:text-slate-200 cursor-pointer" onClick={toggleSpools}>
+              Spools
             </span>
             <span
               className="px-2 py-0.5 text-slate-400 hover:text-slate-200 cursor-pointer"
@@ -230,7 +234,8 @@ export const TopNavigation: React.FC = () => {
         <input
           ref={fileInputRef}
           type="file"
-          accept=".pspc,.dcf,.sqlite"
+          accept=".pspc,.pspx,.pcat,.xml"
+          multiple
           onChange={handleFileUpload}
           className="hidden"
         />
@@ -318,7 +323,7 @@ export const TopNavigation: React.FC = () => {
             type="button"
             onClick={() => fileInputRef.current?.click()}
             className="h-9 px-2 rounded bg-[#2b313d] border border-[#3e4656] hover:border-[#0696d7] text-[10px] font-mono font-bold text-slate-200 flex items-center space-x-1 transition-colors"
-            title="Importar especificación .pspc de AutoCAD Plant 3D"
+            title="Cargar spec de Plant 3D: elegí juntos la .pspc, su .pspx y el DefaultConnectorsConfig.xml del proyecto"
           >
             <span>+SPEC</span>
           </button>
@@ -400,6 +405,15 @@ export const TopNavigation: React.FC = () => {
             title="Zoom Extents (Encuadrar Modelo)"
           >
             EXT
+          </button>
+
+          <button
+            type="button"
+            onClick={toggleSpools}
+            className="h-9 px-2.5 rounded bg-amber-600/20 border border-amber-500/70 text-[11px] font-bold text-amber-300 hover:bg-amber-600/30"
+            title="Spools de taller: cortes, accesorios, soldaduras de taller y de campo"
+          >
+            Spools
           </button>
 
           <button
