@@ -1,9 +1,14 @@
 import React from 'react';
 import { usePipingStore } from '../store/usePipingStore';
+import { usePhoneLayout } from './useIsPhone';
 
 export const ReticleCrosshair: React.FC = () => {
   const snappedPortId = usePipingStore((s) => s.snappedPortId);
   const cameraMode = usePipingStore((s) => s.cameraMode);
+
+  const phone = usePhoneLayout();
+  // En el teléfono se elige tocando el modelo: la retícula del centro no hace falta
+  if (phone) return null;
 
   // Solo mostrar la retícula activa en modo Ruteo o cuando hay un puerto anclado
   return (

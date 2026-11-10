@@ -85,6 +85,14 @@ export const FieldModal: React.FC = () => {
   const cameraRef = useRef<HTMLInputElement>(null);
   const galleryRef = useRef<HTMLInputElement>(null);
 
+  const fieldTabRequest = useProjectStore((s) => s.fieldTabRequest);
+  useEffect(() => {
+    if (isOpen && fieldTabRequest) {
+      setTab(fieldTabRequest);
+      useProjectStore.setState({ fieldTabRequest: undefined });
+    }
+  }, [isOpen, fieldTabRequest]);
+
   const changes = useMemo(
     () => (isOpen && baseline ? diffStates(baseline, graph.serialize()) : []),
     // eslint-disable-next-line react-hooks/exhaustive-deps

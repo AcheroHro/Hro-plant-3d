@@ -38,6 +38,8 @@ interface ProjectState {
   projects: ProjectMeta[];
   isProjectsOpen: boolean;
   isFieldOpen: boolean;
+  /** Pestaña con la que tiene que abrirse el panel de campo (se consume al abrir) */
+  fieldTabRequest?: 'CAMBIOS' | 'NOTAS' | 'INFORME';
   /** Colorear en el visor lo que cambió en campo */
   fieldView: boolean;
 

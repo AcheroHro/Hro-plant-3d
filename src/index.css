@@ -51,3 +51,18 @@ canvas {
 ::-webkit-scrollbar-thumb:hover {
   background: #0696d7;
 }
+
+/* Disposición de teléfono: barra de pestañas y paneles */
+:root {
+  --mobile-top: 70px;
+}
+.mobile-bar-safe {
+  height: calc(3.5rem + env(safe-area-inset-bottom));
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.mobile-sheet-bottom {
+  bottom: calc(3.5rem + env(safe-area-inset-bottom));
+}
+.mobile-sheet-top {
+  top: var(--mobile-top);
+}

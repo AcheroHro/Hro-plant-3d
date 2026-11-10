@@ -1,6 +1,8 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
-import { usePipingStore } from '../store/usePipingStore';
+import { usePipingStore, isolatedIds } from '../store/usePipingStore';
+import { ViewCube } from './ViewCube';
+import { usePhoneLayout } from '../ui/useIsPhone';
 import { createPipeGeometry } from './geometries/pipeGeometry';
 import { createElbowGeometry } from './geometries/elbowGeometry';
 import { createFlangeGeometry } from './geometries/flangeGeometry';
@@ -36,9 +38,26 @@ export const CanvasViewer: React.FC = () => {
   const fieldView = useProjectStore((s) => s.fieldView);
   const fieldBaseline = useProjectStore((s) => s.baseline);
   const triggerFrameAll = usePipingStore((s) => s.triggerFrameAll);
+  const focusRequest = usePipingStore((s) => s.focusRequest);
   const setSnappedPortId = usePipingStore((s) => s.setSnappedPortId);
   const selectPortAndAlign = usePipingStore((s) => s.selectPortAndAlign);
   const setSelectedComponentId = usePipingStore((s) => s.setSelectedComponentId);
+  const connectRoutes = usePipingStore((s) => s.connectRoutes);
+  const connectIndex = usePipingStore((s) => s.connectIndex);
+  const connectTargetId = usePipingStore((s) => s.connectTargetId);
+  const connectPicking = usePipingStore((s) => s.connectPicking);
+  const applyRouting = usePipingStore((s) => s.applyRouting);
+  const multiSelect = usePipingStore((s) => s.multiSelect);
+  const multiMode = usePipingStore((s) => s.multiMode);
+  const isolation = usePipingStore((s) => s.isolation);
+  const measureActive = usePipingStore((s) => s.measureActive);
+  const measurePoints = usePipingStore((s) => s.measurePoints);
+  const sectionBox = usePipingStore((s) => s.sectionBox);
+  const phone = usePhoneLayout();
+  // Estirar un caño arrastrando su grip: largo provisorio hasta soltar
+  const [stretch, setStretch] = useState<{ compId: string; anchor: 'start' | 'end'; length: number } | null>(null);
+  // Cota del caño elegido: al tocarla se edita el largo
+  const [lengthEdit, setLengthEdit] = useState<string | null>(null);
 
   // Referencias para la escena Three.js
   const sceneRef = useRef<THREE.Scene | null>(null);
@@ -47,9 +66,27 @@ export const CanvasViewer: React.FC = () => {
   const pipeGroupRef = useRef<THREE.Group | null>(null);
   const portsGroupRef = useRef<THREE.Group | null>(null);
   const cursorGroupRef = useRef<THREE.Group | null>(null);
+  // Compás sobre la boca activa y manija de largo: se dibujan en píxeles y se reescalan en cada cuadro
+  const gizmoRef = useRef<THREE.Group | null>(null);
+  const handleRef = useRef<THREE.Group | null>(null);
+  const labelRef = useRef<HTMLButtonElement>(null);
+  const dragLengthRef = useRef<{ origin: THREE.Vector3; dir: THREE.Vector3 } | null>(null);
+  const gripsRef = useRef<THREE.Object3D[]>([]);
+  const dimRef = useRef<HTMLDivElement>(null);
+  const dimPosRef = useRef<THREE.Vector3 | null>(null);
+  const dragStretchRef = useRef<{ compId: string; anchor: 'start' | 'end'; fixed: THREE.Vector3; dir: THREE.Vector3; length: number; start: number } | null>(null);
+  const longPressRef = useRef<{ timer: number; fired: boolean } | null>(null);
+  // Cubo de vistas: gira con la cámara; al tocar una cara la cámara va hasta esa vista
+  const cubeRef = useRef<HTMLDivElement>(null);
+  const viewAnimRef = useRef<{ azimuth: number; polar: number } | null>(null);
+  // Medida entre dos puntos: marcas de tamaño fijo en pantalla y cartel en el medio
+  const measureDotsRef = useRef<THREE.Object3D[]>([]);
+  const measureLabelRef = useRef<HTMLDivElement>(null);
+  const measureMidRef = useRef<THREE.Vector3 | null>(null);
+  const lastTapRef = useRef<{ t: number; x: number; y: number } | null>(null);
 
   // Estado de control de cámara táctil (Z-Up)
-  const cameraTargetRef = useRef<THREE.Vector3>(new THREE.Vector3(500, 500, 0));
+  const cameraTargetRef = useRef<THREE.Vector3>(new THREE.Vector3(0, 0, 0));
   const cameraDistanceRef = useRef<number>(2500);
   const cameraPolarRef = useRef<number>(Math.PI / 3); // 60° de inclinación isométrica
   const cameraAzimuthRef = useRef<number>(-Math.PI / 4); // -45° en horizontal
@@ -157,6 +194,79 @@ export const CanvasViewer: React.FC = () => {
         setSnappedPortId(snap.isSnapped && snap.snappedPort ? snap.snappedPort.id : null);
       }
 
+      // Compás y manija con tamaño constante en pantalla; cota de largo pegada a la manija
+      const viewH = containerRef.current?.clientHeight || 1;
+      const viewW = containerRef.current?.clientWidth || 1;
+      const unitsPerPixel = (pos: THREE.Vector3) =>
+        (2 * camera.position.distanceTo(pos) * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2))) / viewH;
+      const gizmo = gizmoRef.current;
+      if (gizmo) gizmo.scale.setScalar(unitsPerPixel(gizmo.position));
+      const handle = handleRef.current;
+      if (handle) handle.scale.setScalar(unitsPerPixel(handle.position));
+      const label = labelRef.current;
+      if (label) {
+        let shown = false;
+        if (handle) {
+          const ndc = handle.position.clone().project(camera);
+          if (ndc.z < 1 && Math.abs(ndc.x) < 1.05 && Math.abs(ndc.y) < 1.05) {
+            const x = ((ndc.x + 1) / 2) * viewW;
+            const y = ((1 - ndc.y) / 2) * viewH;
+            label.style.transform = `translate(${Math.round(Math.min(x + 18, viewW - 120))}px, ${Math.round(Math.max(y - 46, 4))}px)`;
+            shown = true;
+          }
+        }
+        label.style.visibility = shown ? 'visible' : 'hidden';
+      }
+      for (const grip of gripsRef.current) grip.scale.setScalar(unitsPerPixel(grip.position));
+      const dim = dimRef.current;
+      if (dim) {
+        const pos = dimPosRef.current;
+        const ndc = pos ? pos.clone().project(camera) : null;
+        if (ndc && ndc.z < 1 && Math.abs(ndc.x) < 1.05 && Math.abs(ndc.y) < 1.05) {
+          const x = ((ndc.x + 1) / 2) * viewW;
+          const y = ((1 - ndc.y) / 2) * viewH;
+          dim.style.transform = `translate(${Math.round(Math.max(4, Math.min(x, viewW - 150)))}px, ${Math.round(Math.max(y + 14, 4))}px)`;
+          dim.style.visibility = 'visible';
+        } else dim.style.visibility = 'hidden';
+      }
+
+      // Vista pedida desde el cubo: la cámara gira hasta ahí por el camino corto
+      const anim = viewAnimRef.current;
+      if (anim) {
+        const da = Math.atan2(Math.sin(anim.azimuth - cameraAzimuthRef.current), Math.cos(anim.azimuth - cameraAzimuthRef.current));
+        const dp = anim.polar - cameraPolarRef.current;
+        if (Math.abs(da) < 0.004 && Math.abs(dp) < 0.004) {
+          cameraAzimuthRef.current = anim.azimuth;
+          cameraPolarRef.current = anim.polar;
+          viewAnimRef.current = null;
+        } else {
+          cameraAzimuthRef.current += da * 0.22;
+          cameraPolarRef.current += dp * 0.22;
+        }
+        updateCameraPosition();
+      }
+
+      // El cubo de vistas copia el giro de la cámara (mundo Z arriba -> pantalla CSS con Y hacia abajo)
+      const cube = cubeRef.current;
+      if (cube) {
+        const e = camera.matrixWorldInverse.elements;
+        const m = [e[0], -e[1], e[2], 0, -e[8], e[9], -e[10], 0, -e[4], e[5], -e[6], 0, 0, 0, 0, 1];
+        cube.style.transform = `matrix3d(${m.map((n) => n.toFixed(5)).join(',')})`;
+      }
+
+      for (const dot of measureDotsRef.current) dot.scale.setScalar(unitsPerPixel(dot.position));
+      const mLabel = measureLabelRef.current;
+      if (mLabel) {
+        const mid = measureMidRef.current;
+        const ndc = mid ? mid.clone().project(camera) : null;
+        if (ndc && ndc.z < 1 && Math.abs(ndc.x) < 1.05 && Math.abs(ndc.y) < 1.05) {
+          const x = ((ndc.x + 1) / 2) * viewW;
+          const y = ((1 - ndc.y) / 2) * viewH;
+          mLabel.style.transform = `translate(${Math.round(Math.max(4, Math.min(x - 70, viewW - 170)))}px, ${Math.round(Math.max(y - 52, 4))}px)`;
+          mLabel.style.visibility = 'visible';
+        } else mLabel.style.visibility = 'hidden';
+      }
+
       renderer.render(scene, camera);
     };
     animate();
@@ -205,7 +315,8 @@ export const CanvasViewer: React.FC = () => {
     if (!cameraRef.current || !pipeGroupRef.current) return;
     const box = new THREE.Box3().setFromObject(pipeGroupRef.current);
     if (box.isEmpty()) {
-      cameraTargetRef.current.set(500, 500, 0);
+      // Modelo vacío: el primer tramo sale del origen, que queda al centro
+      cameraTargetRef.current.set(0, 0, 0);
       cameraDistanceRef.current = 2500;
     } else {
       const center = new THREE.Vector3();
@@ -214,7 +325,8 @@ export const CanvasViewer: React.FC = () => {
       box.getSize(size);
       const maxDim = Math.max(size.x, size.y, size.z, 350);
       cameraTargetRef.current.copy(center);
-      cameraDistanceRef.current = maxDim * 2.1;
+      // En pantallas angostas (teléfono vertical) hace falta alejarse más para que entre a lo ancho
+      cameraDistanceRef.current = (maxDim * 2.1) / Math.min(1, cameraRef.current.aspect * 1.05);
     }
     updateCameraPosition();
   };
@@ -241,11 +353,35 @@ export const CanvasViewer: React.FC = () => {
     if (cameraMode === 'ROUTE_MODE' && selectedPortId) {
       const port = graph.ports.get(selectedPortId);
       if (port) {
-        cameraTargetRef.current.copy(port.position);
+        // Al centro queda el tramo que se está por trazar, con su manija de largo a la vista
+        const len = Math.min(parseFloat(usePipingStore.getState().numpadValue) || 500, 4000);
+        cameraTargetRef.current.copy(port.position).addScaledVector(activeDirection, len / 2);
+        const cam = cameraRef.current;
+        if (cam && !dragLengthRef.current) {
+          const fit = (len * 1.35) / (2 * Math.tan(THREE.MathUtils.degToRad(cam.fov / 2)) * Math.min(cam.aspect, 0.62));
+          if (fit > cameraDistanceRef.current) cameraDistanceRef.current = Math.min(fit, 12000);
+        }
         updateCameraPosition();
       }
     }
-  }, [cameraMode, selectedPortId, version]);
+  }, [cameraMode, selectedPortId, version, activeDirection]);
+
+  // Al proponer un recorrido de conexión, se encuadra entero para poder compararlo con los otros
+  useEffect(() => {
+    const route = connectRoutes[connectIndex];
+    const cam = cameraRef.current;
+    if (!route || !cam) return;
+    const box = new THREE.Box3().setFromPoints(route.points);
+    const size = box.getSize(new THREE.Vector3());
+    box.getCenter(cameraTargetRef.current);
+    const span = Math.max(size.length(), 400);
+    cameraDistanceRef.current = THREE.MathUtils.clamp(
+      (span * 1.25) / (2 * Math.tan(THREE.MathUtils.degToRad(cam.fov / 2)) * Math.min(cam.aspect, 0.62)),
+      150,
+      35000
+    );
+    updateCameraPosition();
+  }, [connectRoutes, connectIndex]);
 
   // Reconstrucción reactiva de mallas cuando cambia el grafo, selección o versión
   useEffect(() => {
@@ -253,15 +389,11 @@ export const CanvasViewer: React.FC = () => {
 
     const pipeGroup = pipeGroupRef.current;
     const portsGroup = portsGroupRef.current;
-    const cursorGroup = cursorGroupRef.current;
-
     // Limpieza de memoria GPU explícita
     disposeObject(pipeGroup);
     disposeObject(portsGroup);
-    disposeObject(cursorGroup);
     while (pipeGroup.children.length > 0) pipeGroup.remove(pipeGroup.children[0]);
     while (portsGroup.children.length > 0) portsGroup.remove(portsGroup.children[0]);
-    while (cursorGroup.children.length > 0) cursorGroup.remove(cursorGroup.children[0]);
 
     // Materiales técnicos estilo AutoCAD Plant 3D 2027 (DoubleSide para visibilidad total interior/exterior)
     const pipeMaterial = new THREE.MeshStandardMaterial({
@@ -324,6 +456,17 @@ export const CanvasViewer: React.FC = () => {
       side: THREE.DoubleSide
     });
 
+    // Piezas de la selección múltiple (violeta)
+    const multiMaterial = new THREE.MeshStandardMaterial({
+      color: 0xa78bfa,
+      emissive: 0x5b21b6,
+      emissiveIntensity: 0.5,
+      roughness: 0.3,
+      metalness: 0.6,
+      side: THREE.DoubleSide
+    });
+    const multiIds = new Set(multiSelect);
+
     // Material de colisión (rojo alerta)
     const collisionMaterial = new THREE.MeshStandardMaterial({
       color: 0xef4444,
@@ -378,15 +521,20 @@ export const CanvasViewer: React.FC = () => {
       return m;
     };
 
+    // Con una línea aislada, lo demás no se dibuja (ni se puede tocar)
+    const visibleIds = isolatedIds(graph, isolation);
+
     // 1. Construir geometrías para cada componente
     for (const comp of graph.components.values()) {
+      if (visibleIds && !visibleIds.has(comp.id)) continue;
       const isColliding = collidingComponentIds.has(comp.id);
-      const isSelected = comp.id === selectedComponentId;
+      const isSelected = multiMode ? false : comp.id === selectedComponentId;
       const spoolMat = spoolMaterial(comp.id);
       const { outerDiameter, wallThickness, cutLength, angle, radius, runTakeOff, branchTakeOff, faceToFace, boltCircle, boltHoles } =
         comp.parameters;
 
       const pickMat = (defaultMat: THREE.Material) => {
+        if (multiIds.has(comp.id)) return multiMaterial;
         if (isSelected) return selectedMaterial;
         if (isColliding) return collisionMaterial;
         return spoolMat ?? defaultMat;
@@ -572,10 +720,42 @@ export const CanvasViewer: React.FC = () => {
       }
     }
 
+    // 1.a Soportes marcados sobre los caños: abrazadera y pie (o varilla, si cuelga)
+    const supportColors = { APOYO: 0xfacc15, GUIA: 0x22d3ee, ANCLAJE: 0xf87171, COLGANTE: 0xfb923c } as const;
+    for (const mark of graph.liveSupports()) {
+      const host = graph.supportHost(mark);
+      if (!host || (visibleIds && !visibleIds.has(host.id))) continue;
+      const od = host.parameters.outerDiameter || 60.3;
+      const axis = host.ports[1].position.clone().sub(host.ports[0].position).normalize();
+      const mat = new THREE.MeshStandardMaterial({ color: supportColors[mark.kind], roughness: 0.6, metalness: 0.2 });
+      const group = new THREE.Group();
+      const clamp = new THREE.Mesh(new THREE.CylinderGeometry(od * 0.62, od * 0.62, Math.max(30, od * 0.5), 20), mat);
+      clamp.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), axis);
+      group.add(clamp);
+      // El pie baja (o la varilla sube); en caños verticales sale hacia un costado
+      const away = Math.abs(axis.z) > 0.9 ? new THREE.Vector3(-1, 0, 0) : new THREE.Vector3(0, 0, mark.kind === 'COLGANTE' ? 1 : -1);
+      away.addScaledVector(axis, -away.dot(axis)).normalize();
+      const legLen = mark.kind === 'COLGANTE' ? od * 3 : od * 1.6;
+      const legSize = mark.kind === 'COLGANTE' ? od * 0.12 : od * 0.45;
+      const leg = new THREE.Mesh(new THREE.BoxGeometry(legSize, legLen, legSize), mat);
+      leg.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), away);
+      leg.position.copy(away).multiplyScalar(od / 2 + legLen / 2);
+      group.add(leg);
+      if (mark.kind !== 'COLGANTE') {
+        const plateW = mark.kind === 'ANCLAJE' ? od * 2 : od * 1.4;
+        const plate = new THREE.Mesh(new THREE.BoxGeometry(plateW, od * 0.15, plateW), mat);
+        plate.quaternion.copy(leg.quaternion);
+        plate.position.copy(away).multiplyScalar(od / 2 + legLen);
+        group.add(plate);
+      }
+      group.position.copy(mark.position);
+      pipeGroup.add(group);
+    }
+
     // 1.b Renderizar cordones de soldadura / uniones 3D (WeldSubPart / JointMarkerSubPart de Plant 3D)
     for (const joint of graph.joints.values()) {
       const portA = graph.ports.get(joint.portAId);
-      if (portA) {
+      if (portA && (!visibleIds || visibleIds.has(portA.componentId))) {
         const quat = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), portA.direction);
         if (joint.type === 'FLANGED') {
           const thickness = Math.max(1, joint.gapMm ?? 1.6);
@@ -602,6 +782,7 @@ export const CanvasViewer: React.FC = () => {
     // 2. Construir Grips "+" estilo AutoCAD Plant 3D para TODOS los puertos abiertos (fáciles de tocar en móvil/PC)
     const openPorts = graph.getOpenPorts();
     for (const port of openPorts) {
+      if (visibleIds && !visibleIds.has(port.componentId)) continue;
       const isSelected = port.id === selectedPortId;
       const parentComp = graph.components.get(port.componentId);
       const isTeeBranch = parentComp?.type === 'TEE' && parentComp.ports[2]?.id === port.id;
@@ -652,101 +833,428 @@ export const CanvasViewer: React.FC = () => {
       );
       portsGroup.add(stubArrow);
     }
+  }, [graph, version, collidingComponentIds, selectedPortId, selectedComponentId, spoolView, fieldView, fieldBaseline, multiSelect, multiMode, isolation]);
 
-    // 3. Compás 3D de AutoCAD Plant 3D + Previsualización de Tubo Fantasma 3D en el puerto activo
-    const activePort = selectedPortId ? graph.ports.get(selectedPortId) : (openPorts.length > 0 ? openPorts[openPorts.length - 1] : null);
-    if (activePort) {
-      const compassRadius = Math.max(95, activePort.outerDiameter * 1.45);
-      // Anillo del Compás 3D estilo AutoCAD Plant 3D (rojo carmesí/cyan con marcas cada 45° y 90°)
-      const compassRingGeom = new THREE.RingGeometry(compassRadius - 3.5, compassRadius, 48);
-      const compassRingMat = new THREE.MeshBasicMaterial({
-        color: 0xef4444,
-        side: THREE.DoubleSide,
-        transparent: true,
-        opacity: 0.85
-      });
-      const compassRing = new THREE.Mesh(compassRingGeom, compassRingMat);
-      compassRing.position.copy(activePort.position);
-      // Orientar el compás en el plano XY (o perpendicular a la dirección si es vertical)
-      if (Math.abs(activePort.direction.z) > 0.9) {
-        compassRing.rotation.set(0, 0, 0);
-      }
-      cursorGroup.add(compassRing);
-
-      // Marcas de graduación del compás (cada 45°)
-      const tickPoints: THREE.Vector3[] = [];
-      for (let deg = 0; deg < 360; deg += 45) {
-        const rad = THREE.MathUtils.degToRad(deg);
-        const rInner = deg % 90 === 0 ? compassRadius - 18 : compassRadius - 10;
-        const rOuter = compassRadius + 4;
-        tickPoints.push(
-          new THREE.Vector3(
-            activePort.position.x + Math.cos(rad) * rInner,
-            activePort.position.y + Math.sin(rad) * rInner,
-            activePort.position.z
-          ),
-          new THREE.Vector3(
-            activePort.position.x + Math.cos(rad) * rOuter,
-            activePort.position.y + Math.sin(rad) * rOuter,
-            activePort.position.z
-          )
-        );
-      }
-      const ticksGeom = new THREE.BufferGeometry().setFromPoints(tickPoints);
-      const ticksMat = new THREE.LineBasicMaterial({ color: 0xf87171 });
-      const ticksLines = new THREE.LineSegments(ticksGeom, ticksMat);
-      cursorGroup.add(ticksLines);
-
-      // Tubo fantasma 3D semitransparente con el diámetro real (OD) y largo proyectado
-      const lenMm = parseFloat(numpadValue) || 500;
-      const arrowDir = activeDirection.clone().normalize();
-      const previewEnd = activePort.position.clone().add(arrowDir.clone().multiplyScalar(lenMm));
-
-      const ghostRadius = (activePort.outerDiameter || 60.3) / 2;
-      const ghostCylGeom = new THREE.CylinderGeometry(ghostRadius, ghostRadius, lenMm, 20, 1, true);
-      ghostCylGeom.rotateX(Math.PI / 2); // Alinear eje del cilindro con +Z para usar setFromUnitVectors
-      ghostCylGeom.translate(0, 0, lenMm / 2);
-      const ghostCylMat = new THREE.MeshBasicMaterial({
-        color: 0x38bdf8,
-        transparent: true,
-        opacity: 0.24,
-        side: THREE.DoubleSide,
-        depthWrite: false
-      });
-      const ghostCyl = new THREE.Mesh(ghostCylGeom, ghostCylMat);
-      ghostCyl.position.copy(activePort.position);
-      ghostCyl.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), arrowDir);
-      cursorGroup.add(ghostCyl);
-
-      // Línea central punteada de eje a eje
-      const lineGeom = new THREE.BufferGeometry().setFromPoints([activePort.position, previewEnd]);
-      const lineMat = new THREE.LineDashedMaterial({
-        color: 0x38bdf8,
-        dashSize: 40,
-        gapSize: 20
-      });
-      const previewLine = new THREE.Line(lineGeom, lineMat);
-      previewLine.computeLineDistances();
-      cursorGroup.add(previewLine);
-
-      // Flecha indicadora de dirección activa
-      const arrowHelper = new THREE.ArrowHelper(arrowDir, activePort.position, Math.min(260, lenMm), 0x22c55e, 52, 32);
-      cursorGroup.add(arrowHelper);
+  // Medida: dos marcas, la línea entre ellas y el cartel con la distancia
+  useEffect(() => {
+    const scene = sceneRef.current;
+    if (!scene || !measurePoints.length) {
+      measureMidRef.current = null;
+      measureDotsRef.current = [];
+      return;
     }
-  }, [graph, version, collidingComponentIds, selectedPortId, selectedComponentId, activeDirection, numpadValue, spoolView, fieldView, fieldBaseline]);
+    const group = new THREE.Group();
+    const mat = new THREE.MeshBasicMaterial({ color: 0xf0abfc, depthTest: false, depthWrite: false, transparent: true });
+    const dots = measurePoints.map((p) => {
+      const dot = new THREE.Mesh(new THREE.SphereGeometry(6, 14, 14), mat);
+      dot.position.copy(p);
+      dot.renderOrder = 20;
+      group.add(dot);
+      return dot;
+    });
+    if (measurePoints.length === 2) {
+      const line = new THREE.Line(
+        new THREE.BufferGeometry().setFromPoints(measurePoints),
+        new THREE.LineBasicMaterial({ color: 0xf0abfc, depthTest: false, transparent: true })
+      );
+      line.renderOrder = 19;
+      group.add(line);
+      measureMidRef.current = measurePoints[0].clone().lerp(measurePoints[1], 0.5);
+    } else {
+      measureMidRef.current = null;
+    }
+    measureDotsRef.current = dots;
+    scene.add(group);
+    return () => {
+      scene.remove(group);
+      disposeObject(group);
+      measureDotsRef.current = [];
+    };
+  }, [measurePoints]);
+
+  // Caja de corte: seis planos de recorte y el contorno de la caja
+  useEffect(() => {
+    const scene = sceneRef.current;
+    const renderer = rendererRef.current;
+    if (!scene || !renderer) return;
+    if (!sectionBox) {
+      renderer.clippingPlanes = [];
+      return;
+    }
+    const [x0, y0, z0] = sectionBox.min;
+    const [x1, y1, z1] = sectionBox.max;
+    const pad = 2;
+    renderer.clippingPlanes = [
+      new THREE.Plane(new THREE.Vector3(1, 0, 0), -x0 + pad),
+      new THREE.Plane(new THREE.Vector3(-1, 0, 0), x1 + pad),
+      new THREE.Plane(new THREE.Vector3(0, 1, 0), -y0 + pad),
+      new THREE.Plane(new THREE.Vector3(0, -1, 0), y1 + pad),
+      new THREE.Plane(new THREE.Vector3(0, 0, 1), -z0 + pad),
+      new THREE.Plane(new THREE.Vector3(0, 0, -1), z1 + pad)
+    ];
+    const helper = new THREE.Box3Helper(new THREE.Box3(new THREE.Vector3(x0, y0, z0), new THREE.Vector3(x1, y1, z1)), 0xf59e0b);
+    scene.add(helper);
+    return () => {
+      scene.remove(helper);
+      helper.geometry.dispose();
+      (helper.material as THREE.Material).dispose();
+      renderer.clippingPlanes = [];
+    };
+  }, [sectionBox]);
+
+  // Cursor de trazado sobre el modelo: compás de Plant en la boca activa, caño fantasma, manija para
+  // dar el largo arrastrando y vista previa del recorrido al conectar dos bocas. Va aparte de las
+  // mallas para que arrastrar el largo no reconstruya todo el modelo.
+  useEffect(() => {
+    const cursorGroup = cursorGroupRef.current;
+    if (!cursorGroup) return;
+    disposeObject(cursorGroup);
+    while (cursorGroup.children.length > 0) cursorGroup.remove(cursorGroup.children[0]);
+    gizmoRef.current = null;
+    handleRef.current = null;
+    gripsRef.current = [];
+    dimPosRef.current = null;
+
+    // Caño elegido: grips cuadrados en los extremos para estirarlo y cota en el medio
+    const picked = !multiMode && selectedComponentId ? graph.components.get(selectedComponentId) : undefined;
+    if (picked && picked.type === 'PIPE' && picked.ports.length >= 2 && !connectRoutes.length) {
+      const live = stretch && stretch.compId === picked.id ? stretch : null;
+      for (const anchor of ['start', 'end'] as const) {
+        const fixed = anchor === 'start' ? picked.ports[0] : picked.ports[1];
+        const moving = anchor === 'start' ? picked.ports[1] : picked.ports[0];
+        const pos =
+          live && live.anchor === anchor ? fixed.position.clone().addScaledVector(moving.direction, live.length) : moving.position.clone();
+        const grip = new THREE.Group();
+        grip.position.copy(pos);
+        const edge = new THREE.Mesh(new THREE.BoxGeometry(15, 15, 15), new THREE.MeshBasicMaterial({ color: 0xffffff, depthTest: false, transparent: true }));
+        const core = new THREE.Mesh(new THREE.BoxGeometry(11, 11, 11), new THREE.MeshBasicMaterial({ color: 0x2563eb, depthTest: false, transparent: true }));
+        edge.renderOrder = 1002;
+        core.renderOrder = 1003;
+        const grab = new THREE.Mesh(new THREE.SphereGeometry(22, 8, 8), new THREE.MeshBasicMaterial({ visible: false }));
+        grab.userData = { stretchAnchor: anchor, compId: picked.id };
+        grip.add(edge, core, grab);
+        cursorGroup.add(grip);
+        gripsRef.current.push(grip);
+      }
+      if (live) {
+        const fixed = live.anchor === 'start' ? picked.ports[0] : picked.ports[1];
+        const moving = live.anchor === 'start' ? picked.ports[1] : picked.ports[0];
+        const end = fixed.position.clone().addScaledVector(moving.direction, live.length);
+        const r = (picked.parameters.outerDiameter || 60.3) / 2 + 2;
+        const ghost = new THREE.Mesh(
+          new THREE.CylinderGeometry(r, r, live.length, 20, 1, true),
+          new THREE.MeshBasicMaterial({ color: 0xfbbf24, transparent: true, opacity: 0.45, side: THREE.DoubleSide, depthWrite: false })
+        );
+        ghost.position.copy(fixed.position.clone().lerp(end, 0.5));
+        ghost.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), moving.direction.clone().normalize());
+        cursorGroup.add(ghost);
+        dimPosRef.current = fixed.position.clone().lerp(end, 0.5);
+      } else {
+        dimPosRef.current = picked.ports[0].position.clone().lerp(picked.ports[1].position, 0.5);
+      }
+    }
+
+    const openPorts = graph.getOpenPorts();
+    const activePort = selectedPortId ? graph.ports.get(selectedPortId) : openPorts.length > 0 ? openPorts[openPorts.length - 1] : null;
+    // Sin modelo todavía, el primer tramo sale del origen
+    const origin = activePort ? activePort.position.clone() : graph.components.size === 0 ? new THREE.Vector3(0, 0, 0) : null;
+    if (!origin || (activePort && activePort.connectedJointId)) return;
+
+    const overlay = (color: number, opacity = 1) =>
+      new THREE.MeshBasicMaterial({ color, transparent: true, opacity, depthTest: false, depthWrite: false });
+    const Y_UP = new THREE.Vector3(0, 1, 0);
+    const od = activePort?.outerDiameter || 60.3;
+
+    // Recorrido propuesto para conectar con otra boca
+    const route = connectRoutes[connectIndex];
+    if (route) {
+      const routeMat = new THREE.MeshBasicMaterial({ color: 0xe879f9, transparent: true, opacity: 0.45, depthWrite: false, side: THREE.DoubleSide });
+      for (let k = 0; k + 1 < route.points.length; k++) {
+        const a = route.points[k];
+        const b = route.points[k + 1];
+        const len = a.distanceTo(b);
+        const leg = new THREE.Mesh(new THREE.CylinderGeometry(od / 2, od / 2, len, 20), routeMat);
+        leg.position.copy(a.clone().lerp(b, 0.5));
+        leg.quaternion.setFromUnitVectors(Y_UP, b.clone().sub(a).normalize());
+        cursorGroup.add(leg);
+        if (k > 0) {
+          const knee = new THREE.Mesh(new THREE.SphereGeometry(od * 0.62, 16, 12), routeMat);
+          knee.position.copy(a);
+          cursorGroup.add(knee);
+        }
+      }
+      const axisLine = new THREE.Line(
+        new THREE.BufferGeometry().setFromPoints(route.points),
+        new THREE.LineBasicMaterial({ color: 0xf5d0fe, depthTest: false, transparent: true })
+      );
+      axisLine.renderOrder = 998;
+      cursorGroup.add(axisLine);
+      const target = connectTargetId ? graph.ports.get(connectTargetId) : null;
+      if (target) {
+        const ring = new THREE.Mesh(new THREE.TorusGeometry(od * 0.9, od * 0.12, 10, 28), overlay(0xe879f9));
+        ring.position.copy(target.position);
+        ring.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), target.direction);
+        ring.renderOrder = 998;
+        cursorGroup.add(ring);
+      }
+      return;
+    }
+
+    const lenMm = Math.max(1, parseFloat(numpadValue) || 500);
+    const arrowDir = activeDirection.clone().normalize();
+    const previewEnd = origin.clone().addScaledVector(arrowDir, lenMm);
+
+    // Caño fantasma con el diámetro real y el largo que se va a trazar
+    const ghostGeom = new THREE.CylinderGeometry(od / 2, od / 2, lenMm, 20, 1, true);
+    const ghost = new THREE.Mesh(
+      ghostGeom,
+      new THREE.MeshBasicMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.26, side: THREE.DoubleSide, depthWrite: false })
+    );
+    ghost.position.copy(origin.clone().lerp(previewEnd, 0.5));
+    ghost.quaternion.setFromUnitVectors(Y_UP, arrowDir);
+    cursorGroup.add(ghost);
+
+    const previewLine = new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints([origin, previewEnd]),
+      new THREE.LineDashedMaterial({ color: 0x38bdf8, dashSize: 40, gapSize: 20 })
+    );
+    previewLine.computeLineDistances();
+    cursorGroup.add(previewLine);
+
+    // Compás: una flecha por eje (X rojo, Y verde, Z azul); se toca la flecha para elegir la dirección.
+    // No se ofrece volver sobre la propia boca (180°).
+    const gizmo = new THREE.Group();
+    gizmo.position.copy(origin);
+    const AXIS_COLOR = [0xef4444, 0x22c55e, 0x3b82f6];
+    for (let axis = 0; axis < 3; axis++) {
+      for (const sign of [1, -1]) {
+        const dir = new THREE.Vector3().setComponent(axis, sign);
+        if (activePort && activePort.direction.dot(dir) < -0.99) continue;
+        const isActive = arrowDir.dot(dir) > 0.99;
+        const quat = new THREE.Quaternion().setFromUnitVectors(Y_UP, dir);
+        const mat = overlay(isActive ? 0xfacc15 : AXIS_COLOR[axis], isActive ? 1 : 0.8);
+        const shaft = new THREE.Mesh(new THREE.CylinderGeometry(isActive ? 3 : 2, isActive ? 3 : 2, 40, 8), mat);
+        shaft.position.copy(dir.clone().multiplyScalar(38));
+        shaft.quaternion.copy(quat);
+        const tip = new THREE.Mesh(new THREE.ConeGeometry(isActive ? 10 : 7.5, 18, 14), mat);
+        tip.position.copy(dir.clone().multiplyScalar(67));
+        tip.quaternion.copy(quat);
+        // Zona de toque de 44 px alrededor de la punta
+        const hit = new THREE.Mesh(new THREE.SphereGeometry(22, 8, 8), new THREE.MeshBasicMaterial({ visible: false }));
+        hit.position.copy(dir.clone().multiplyScalar(64));
+        hit.userData = { axisDir: [dir.x, dir.y, dir.z] };
+        for (const m of [shaft, tip]) m.renderOrder = 999;
+        gizmo.add(shaft, tip, hit);
+      }
+    }
+    cursorGroup.add(gizmo);
+    gizmoRef.current = gizmo;
+
+    // Manija en la punta del caño fantasma: se arrastra para dar el largo
+    const handle = new THREE.Group();
+    handle.position.copy(previewEnd);
+    const knobRing = new THREE.Mesh(new THREE.SphereGeometry(11, 20, 14), overlay(0xffffff));
+    const knob = new THREE.Mesh(new THREE.SphereGeometry(8, 20, 14), overlay(0x22c55e));
+    knobRing.renderOrder = 1000;
+    knob.renderOrder = 1001;
+    const grab = new THREE.Mesh(new THREE.SphereGeometry(26, 8, 8), new THREE.MeshBasicMaterial({ visible: false }));
+    grab.userData = { lengthHandle: true };
+    handle.add(knobRing, knob, grab);
+    handle.userData = { origin, dir: arrowDir };
+    cursorGroup.add(handle);
+    handleRef.current = handle;
+  }, [graph, version, selectedPortId, selectedComponentId, activeDirection, numpadValue, connectRoutes, connectIndex, connectTargetId, multiMode, stretch]);
+
+  // Otra pieza elegida: se cierra la edición de la cota
+  useEffect(() => setLengthEdit(null), [selectedComponentId, version]);
 
   // Gestos multitáctiles y selección 3D CAD:
   // - Tap corto (< 8px): Selecciona puerto abierto (boca/ramal) o selecciona cañería/accesorio en 3D
   // - Arrastrar con 1 dedo: Órbita 3D libre alrededor de la escena (en cualquier modo)
   // - 2 dedos: Paneo y Pellizco (Pinch-to-zoom) simultáneos
+  const rayFromPointer = (e: React.PointerEvent): THREE.Raycaster | null => {
+    if (!cameraRef.current || !containerRef.current) return null;
+    const rect = containerRef.current.getBoundingClientRect();
+    const mouse = new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
+    const raycaster = new THREE.Raycaster();
+    raycaster.setFromCamera(mouse, cameraRef.current);
+    return raycaster;
+  };
+
+  /** Lo que quedó fuera de la caja de corte no se ve, así que tampoco se puede tocar */
+  const inSection = (p: THREE.Vector3) => {
+    const box = usePipingStore.getState().sectionBox;
+    if (!box) return true;
+    return [p.x, p.y, p.z].every((v, i) => v >= box.min[i] - 2 && v <= box.max[i] + 2);
+  };
+
+  /** Punto de medida para un toque sobre una pieza: sus bocas o, en un caño, el punto del eje */
+  const measurePointFor = (compId: string, hitPoint: THREE.Vector3): THREE.Vector3 => {
+    const comp = usePipingStore.getState().graph.components.get(compId);
+    if (!comp || !comp.ports.length) return hitPoint.clone();
+    if (comp.type === 'PIPE' && comp.ports.length >= 2) {
+      const a = comp.ports[0].position;
+      const axis = comp.ports[1].position.clone().sub(a);
+      const len = axis.length();
+      axis.normalize();
+      const t = THREE.MathUtils.clamp(hitPoint.clone().sub(a).dot(axis), 0, len);
+      // Cerca de una punta se toma la punta
+      const snap = Math.min(len / 3, Math.max(comp.parameters.outerDiameter, len * 0.12));
+      if (t < snap) return a.clone();
+      if (t > len - snap) return comp.ports[1].position.clone();
+      return a.clone().addScaledVector(axis, t);
+    }
+    let best = comp.ports[0].position;
+    for (const p of comp.ports) if (p.position.distanceTo(hitPoint) < best.distanceTo(hitPoint)) best = p.position;
+    return best.clone();
+  };
+
+  /** Encuadra una pieza (doble toque sobre ella) */
+  const frameComponent = (compId: string) => {
+    const comp = usePipingStore.getState().graph.components.get(compId);
+    const cam = cameraRef.current;
+    if (!comp || !cam) return;
+    const box = new THREE.Box3();
+    for (const p of comp.ports) box.expandByPoint(p.position);
+    for (const pt of comp.centerline) box.expandByPoint(pt);
+    if (box.isEmpty()) return;
+    box.getCenter(cameraTargetRef.current);
+    const span = Math.max(box.getSize(new THREE.Vector3()).length(), 300);
+    cameraDistanceRef.current = THREE.MathUtils.clamp((span * 1.9) / Math.min(1, cam.aspect * 1.05), 150, 35000);
+    updateCameraPosition();
+  };
+
+  // La lista de avisos pide mostrar una pieza
+  useEffect(() => {
+    if (focusRequest) frameComponent(focusRequest.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusRequest]);
+
   const handlePointerDown = (e: React.PointerEvent) => {
-    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    viewAnimRef.current = null;
+    try {
+      (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    } catch {
+      // El puntero ya no está activo: se sigue sin captura
+    }
     touchPointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (touchPointersRef.current.size === 1) {
       pointerDownPosRef.current = { x: e.clientX, y: e.clientY };
+      // Sobre la manija verde: el dedo da el largo en vez de orbitar
+      const handle = handleRef.current;
+      const raycaster = rayFromPointer(e);
+      const gripHit = raycaster
+        ? raycaster.intersectObjects(gripsRef.current, true).find((h) => h.object.userData?.stretchAnchor)
+        : undefined;
+      if (handle && raycaster && raycaster.intersectObject(handle, true).some((h) => h.object.userData?.lengthHandle)) {
+        dragLengthRef.current = { origin: handle.userData.origin.clone(), dir: handle.userData.dir.clone() };
+        if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate(12);
+      } else if (gripHit) {
+        // Sobre un grip azul: el dedo estira el caño
+        const { stretchAnchor, compId } = gripHit.object.userData as { stretchAnchor: 'start' | 'end'; compId: string };
+        const comp = usePipingStore.getState().graph.components.get(compId);
+        if (comp) {
+          const fixed = stretchAnchor === 'start' ? comp.ports[0] : comp.ports[1];
+          const moving = stretchAnchor === 'start' ? comp.ports[1] : comp.ports[0];
+          const length = fixed.position.distanceTo(moving.position);
+          dragStretchRef.current = {
+            compId,
+            anchor: stretchAnchor,
+            fixed: fixed.position.clone(),
+            dir: moving.direction.clone().normalize(),
+            length,
+            start: length
+          };
+          if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate(12);
+        }
+      } else {
+        // Mantener apretado sobre una pieza abre su menú
+        const x = e.clientX;
+        const y = e.clientY;
+        const timer = window.setTimeout(() => openMenuAt(x, y), 520);
+        longPressRef.current = { timer, fired: false };
+      }
     } else {
       pointerDownPosRef.current = null;
+      dragLengthRef.current = null;
+      dragStretchRef.current = null;
+      setStretch(null);
+      cancelLongPress();
     }
+  };
+
+  const cancelLongPress = () => {
+    if (longPressRef.current && !longPressRef.current.fired) {
+      window.clearTimeout(longPressRef.current.timer);
+      longPressRef.current = null;
+    }
+  };
+
+  const openMenuAt = (clientX: number, clientY: number) => {
+    const press = longPressRef.current;
+    if (!press || !cameraRef.current || !containerRef.current || !pipeGroupRef.current) return;
+    const rect = containerRef.current.getBoundingClientRect();
+    const raycaster = new THREE.Raycaster();
+    raycaster.setFromCamera(
+      new THREE.Vector2(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1),
+      cameraRef.current
+    );
+    const hit = raycaster.intersectObjects(pipeGroupRef.current.children, true).find((h) => h.object.userData?.componentId);
+    if (!hit) {
+      longPressRef.current = null;
+      return;
+    }
+    press.fired = true;
+    const store = usePipingStore.getState();
+    const compId = hit.object.userData.componentId as string;
+    const comp = store.graph.components.get(compId);
+    if (!comp) return;
+    if (!store.multiMode) store.setSelectedComponentId(compId);
+    let offsetMm: number | undefined;
+    if (comp.type === 'PIPE' && comp.ports.length >= 2) {
+      const a = comp.ports[0].position;
+      const axis = comp.ports[1].position.clone().sub(a);
+      const len = axis.length();
+      offsetMm = THREE.MathUtils.clamp(hit.point.clone().sub(a).dot(axis.normalize()), 0, len);
+    }
+    if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate(30);
+    store.openPieceMenu({ x: clientX, y: clientY, componentId: compId, offsetMm });
+  };
+
+  /** Posición del dedo sobre un eje: distancia desde `origin` a lo largo de `dir`, y mm por píxel ahí */
+  const pointOnAxis = (e: React.PointerEvent, origin: THREE.Vector3, dir: THREE.Vector3): { t: number; step: number } | null => {
+    const raycaster = rayFromPointer(e);
+    if (!raycaster || !cameraRef.current || !containerRef.current) return null;
+    const r = raycaster.ray.direction;
+    const w = origin.clone().sub(raycaster.ray.origin);
+    const b = dir.dot(r);
+    const denom = 1 - b * b;
+    if (denom < 1e-3) return null;
+    const mmPerPx =
+      (2 * cameraRef.current.position.distanceTo(origin) * Math.tan(THREE.MathUtils.degToRad(cameraRef.current.fov / 2))) /
+      containerRef.current.clientHeight;
+    return { t: (b * r.dot(w) - dir.dot(w)) / denom, step: mmPerPx < 1.2 ? 5 : mmPerPx < 8 ? 10 : 50 };
+  };
+
+  /** Largo que marca el dedo: el punto del eje de trazado más cercano al rayo del toque */
+  const dragLength = (e: React.PointerEvent) => {
+    const drag = dragLengthRef.current;
+    const raycaster = rayFromPointer(e);
+    if (!drag || !raycaster || !cameraRef.current || !containerRef.current) return;
+    const r = raycaster.ray.direction;
+    const w = drag.origin.clone().sub(raycaster.ray.origin);
+    const b = drag.dir.dot(r);
+    const denom = 1 - b * b;
+    if (denom < 1e-3) return; // el eje apunta a la cámara: no se puede medir
+    const t = (b * r.dot(w) - drag.dir.dot(w)) / denom;
+    // El paso depende del zoom: de cerca 5 mm, de lejos 50 mm
+    const mmPerPx =
+      (2 * cameraRef.current.position.distanceTo(drag.origin) * Math.tan(THREE.MathUtils.degToRad(cameraRef.current.fov / 2))) /
+      containerRef.current.clientHeight;
+    const step = mmPerPx < 1.2 ? 5 : mmPerPx < 8 ? 10 : 50;
+    const length = Math.min(60000, Math.max(step, Math.round(t / step) * step));
+    const state = usePipingStore.getState();
+    if (String(length) !== state.numpadValue) state.setNumpadValue(String(length));
   };
 
   const handlePointerMove = (e: React.PointerEvent) => {
@@ -755,7 +1263,25 @@ export const CanvasViewer: React.FC = () => {
 
     const pointers = Array.from(touchPointersRef.current.values());
 
-    if (pointers.length === 1) {
+    if (pointerDownPosRef.current && Math.hypot(e.clientX - pointerDownPosRef.current.x, e.clientY - pointerDownPosRef.current.y) > 9) {
+      cancelLongPress();
+    }
+
+    if (pointers.length === 1 && longPressRef.current?.fired) {
+      // Con el menú abierto el dedo ya no orbita
+    } else if (pointers.length === 1 && dragStretchRef.current) {
+      const drag = dragStretchRef.current;
+      const at = pointOnAxis(e, drag.fixed, drag.dir);
+      if (at) {
+        const length = Math.min(60000, Math.max(at.step, Math.round(at.t / at.step) * at.step));
+        if (length !== drag.length) {
+          drag.length = length;
+          setStretch({ compId: drag.compId, anchor: drag.anchor, length });
+        }
+      }
+    } else if (pointers.length === 1 && dragLengthRef.current) {
+      dragLength(e);
+    } else if (pointers.length === 1) {
       // 1 dedo / clic izquierdo arrastrado: Órbita alrededor del objetivo (Z-Up) siempre activa
       const dx = e.movementX;
       const dy = e.movementY;
@@ -807,8 +1333,22 @@ export const CanvasViewer: React.FC = () => {
   };
 
   const handlePointerUp = (e: React.PointerEvent) => {
+    const stretched = dragStretchRef.current;
+    const menuOpened = Boolean(longPressRef.current?.fired);
+    cancelLongPress();
+    longPressRef.current = null;
+    const wasDraggingLength = Boolean(dragLengthRef.current) || Boolean(stretched) || menuOpened;
+    dragLengthRef.current = null;
+    dragStretchRef.current = null;
+    if (stretched) {
+      setStretch(null);
+      if (Math.abs(stretched.length - stretched.start) > 0.5) {
+        usePipingStore.getState().stretchPipe(stretched.compId, stretched.length, stretched.anchor);
+      }
+    }
+
     // Verificar si fue un Tap/Clic limpio (sin arrastrar la cámara) para seleccionar bocas o piezas 3D
-    if (pointerDownPosRef.current && touchPointersRef.current.size === 1) {
+    if (!wasDraggingLength && pointerDownPosRef.current && touchPointersRef.current.size === 1) {
       const moveDist = Math.hypot(
         e.clientX - pointerDownPosRef.current.x,
         e.clientY - pointerDownPosRef.current.y
@@ -823,18 +1363,76 @@ export const CanvasViewer: React.FC = () => {
         const raycaster = new THREE.Raycaster();
         raycaster.setFromCamera(mouse, cameraRef.current);
 
-        // Prioridad 1: Grips de puertos abiertos (bocas de cañería y ramales de Te)
         let handled = false;
-        if (portsGroupRef.current) {
-          const portHits = raycaster.intersectObjects(portsGroupRef.current.children, true);
-          for (const hit of portHits) {
-            const portId = hit.object.userData?.portId || hit.object.parent?.userData?.portId;
-            if (portId) {
-              selectPortAndAlign(portId);
-              if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate(20);
-              handled = true;
-              break;
+        const store = usePipingStore.getState();
+        const firstComponentHit = () => {
+          for (const hit of raycaster.intersectObjects(pipeGroupRef.current?.children ?? [], true)) {
+            const compId = hit.object.userData?.componentId || hit.object.parent?.userData?.componentId;
+            if (compId && inSection(hit.point)) return { compId: compId as string, point: hit.point };
+          }
+          return null;
+        };
+
+        // Doble toque: encuadra la pieza tocada, o todo el modelo si fue en el vacío
+        const now = performance.now();
+        const last = lastTapRef.current;
+        if (last && now - last.t < 330 && Math.hypot(e.clientX - last.x, e.clientY - last.y) < 30) {
+          lastTapRef.current = null;
+          const hit = firstComponentHit();
+          if (hit) frameComponent(hit.compId);
+          else store.frameAll();
+          if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate(15);
+          handled = true;
+        } else {
+          lastTapRef.current = { t: now, x: e.clientX, y: e.clientY };
+        }
+
+        // Medir: el toque marca un punto en vez de seleccionar
+        if (!handled && store.measureActive) {
+          const hit = firstComponentHit();
+          if (hit) {
+            store.addMeasurePoint(measurePointFor(hit.compId, hit.point));
+            if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate(15);
+          }
+          handled = true;
+        }
+
+        // Prioridad 0: flechas del compás sobre la boca activa (eligen la dirección de trazado)
+        if (gizmoRef.current && !store.connectPicking) {
+          const axisHit = raycaster.intersectObject(gizmoRef.current, true).find((h) => h.object.userData?.axisDir);
+          if (axisHit) {
+            const [x, y, z] = axisHit.object.userData.axisDir as [number, number, number];
+            store.setActiveDirection(new THREE.Vector3(x, y, z));
+            if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate(12);
+            handled = true;
+          }
+        }
+
+        // Prioridad 1: grips de bocas libres. Si el dedo no acierta justo, vale la boca a menos de 28 px.
+        if (!handled) {
+          let portId: string | null = null;
+          if (portsGroupRef.current) {
+            const hit = raycaster.intersectObjects(portsGroupRef.current.children, true).find((h) => h.object.userData?.portId);
+            if (hit) portId = hit.object.userData.portId;
+          }
+          if (!portId) {
+            let best = 28;
+            for (const port of store.graph.getOpenPorts()) {
+              const ndc = port.position.clone().project(cameraRef.current);
+              if (ndc.z > 1) continue;
+              const d = Math.hypot(((ndc.x + 1) / 2) * rect.width + rect.left - e.clientX, ((1 - ndc.y) / 2) * rect.height + rect.top - e.clientY);
+              if (d < best) {
+                best = d;
+                portId = port.id;
+              }
             }
+          }
+          if (portId) {
+            // Conectando: el toque elige la boca de destino en vez de cambiar la boca activa
+            if (store.connectPicking) store.pickConnectTarget(portId);
+            else selectPortAndAlign(portId);
+            if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate(20);
+            handled = true;
           }
         }
 
@@ -843,8 +1441,10 @@ export const CanvasViewer: React.FC = () => {
           const compHits = raycaster.intersectObjects(pipeGroupRef.current.children, true);
           for (const hit of compHits) {
             const compId = hit.object.userData?.componentId || hit.object.parent?.userData?.componentId;
-            if (compId) {
-              setSelectedComponentId(compId);
+            if (compId && inSection(hit.point)) {
+              // Selección múltiple: el toque suma o quita la pieza
+              if (store.multiMode) store.toggleMultiComponent(compId);
+              else setSelectedComponentId(compId);
               if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate(15);
               handled = true;
               break;
@@ -853,7 +1453,7 @@ export const CanvasViewer: React.FC = () => {
         }
 
         // Si se tocó el espacio vacío del visor 3D, deseleccionar la pieza activa
-        if (!handled) {
+        if (!handled && !store.multiMode && !store.measureActive) {
           setSelectedComponentId(null);
         }
       }
@@ -890,8 +1490,119 @@ export const CanvasViewer: React.FC = () => {
         onPointerUp={handlePointerUp}
         onPointerCancel={handlePointerUp}
         onWheel={handleWheel}
+        onContextMenu={(e) => {
+          // Clic derecho en la computadora: el mismo menú que mantener apretado
+          e.preventDefault();
+          longPressRef.current = { timer: 0, fired: false };
+          openMenuAt(e.clientX, e.clientY);
+          longPressRef.current = null;
+        }}
         className="w-full h-full block cursor-grab active:cursor-grabbing outline-none"
       />
+      {!(phone && multiMode) && (
+        <ViewCube
+          ref={cubeRef}
+          style={phone ? { top: 'calc(var(--mobile-top) + 2px)', right: 0 } : { top: 104, right: 8 }}
+          onView={(azimuth, polar) => {
+            viewAnimRef.current = { azimuth, polar };
+          }}
+          onHome={() => {
+            viewAnimRef.current = { azimuth: -Math.PI / 4, polar: Math.PI / 3 };
+            usePipingStore.getState().frameAll();
+          }}
+        />
+      )}
+      {/* Medida entre los dos puntos tocados */}
+      <div ref={measureLabelRef} style={{ visibility: 'hidden' }} className="absolute left-0 top-0 pointer-events-none">
+        {measureActive && measurePoints.length === 2 && (
+          <div className="px-2.5 py-1 rounded-lg bg-[#2a0f33]/95 border border-fuchsia-300 text-fuchsia-100 font-mono shadow-lg text-center leading-tight">
+            <div className="text-sm font-black">{Math.round(measurePoints[0].distanceTo(measurePoints[1]))} mm</div>
+            <div className="text-[10px] text-fuchsia-200/90 whitespace-nowrap">
+              ΔX {Math.round(Math.abs(measurePoints[1].x - measurePoints[0].x))} · ΔY {Math.round(Math.abs(measurePoints[1].y - measurePoints[0].y))} · ΔZ{' '}
+              {Math.round(Math.abs(measurePoints[1].z - measurePoints[0].z))}
+            </div>
+          </div>
+        )}
+      </div>
+      {/* Cota del caño elegido: se toca para escribir el largo; mientras se estira muestra el largo nuevo */}
+      <div ref={dimRef} style={{ visibility: 'hidden' }} className="absolute left-0 top-0">
+        {(() => {
+          const comp = !multiMode && selectedComponentId ? graph.components.get(selectedComponentId) : undefined;
+          if (!comp || comp.type !== 'PIPE' || comp.ports.length < 2 || connectRoutes.length) return null;
+          const current = Math.round(comp.parameters.cutLength || comp.ports[0].position.distanceTo(comp.ports[1].position));
+          if (stretch && stretch.compId === comp.id) {
+            return (
+              <div className="h-9 px-3 rounded-full bg-amber-400 text-slate-950 font-mono font-black text-sm flex items-center shadow-lg">
+                {Math.round(stretch.length)} mm
+              </div>
+            );
+          }
+          if (lengthEdit === null) {
+            return (
+              <button
+                type="button"
+                onClick={() => setLengthEdit(String(current))}
+                className="h-9 px-3 rounded-full bg-[#0f172a]/95 border border-blue-400 text-blue-200 font-mono font-bold text-sm shadow-lg active:scale-95"
+                title="Cambiar el largo de este caño"
+              >
+                {current} mm
+              </button>
+            );
+          }
+          const submit = () => {
+            const value = parseFloat(lengthEdit);
+            setLengthEdit(null);
+            if (value > 10 && Math.abs(value - current) > 0.5) {
+              // Si un solo extremo está libre, ese es el que se mueve
+              const anchor = comp.ports[1].connectedJointId && !comp.ports[0].connectedJointId ? 'end' : 'start';
+              usePipingStore.getState().stretchPipe(comp.id, value, anchor);
+            }
+          };
+          return (
+            <form
+              onSubmit={(ev) => {
+                ev.preventDefault();
+                submit();
+              }}
+              className="flex items-center gap-1 p-1 rounded-xl bg-[#0f172a] border border-blue-400 shadow-lg"
+            >
+              <input
+                autoFocus
+                type="number"
+                inputMode="decimal"
+                value={lengthEdit}
+                onChange={(ev) => setLengthEdit(ev.target.value)}
+                onFocus={(ev) => ev.target.select()}
+                className="h-10 w-24 px-2 rounded-lg bg-[#1b1f26] text-base font-mono font-black text-blue-200 outline-none"
+                aria-label="Largo del caño en milímetros"
+              />
+              <button type="submit" className="h-10 px-3 rounded-lg bg-blue-600 text-white text-sm font-black">
+                OK
+              </button>
+              <button type="button" onClick={() => setLengthEdit(null)} className="h-10 w-9 rounded-lg text-slate-300" aria-label="Cancelar">
+                ✕
+              </button>
+            </form>
+          );
+        })()}
+      </div>
+      {/* Cota del tramo que se está por trazar: acompaña a la manija y, al tocarla, traza */}
+      <button
+        ref={labelRef}
+        type="button"
+        onClick={() => {
+          if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate(25);
+          applyRouting();
+        }}
+        style={{ visibility: 'hidden' }}
+        className={`absolute left-0 top-0 h-10 pl-3 pr-2.5 rounded-full bg-[#0f172a]/95 border border-emerald-400 text-emerald-300 font-mono font-black text-sm shadow-lg items-center gap-2 active:scale-95 ${
+          connectRoutes.length || connectPicking ? 'hidden' : 'flex'
+        }`}
+        title="Trazar este tramo"
+      >
+        <span>{numpadValue || '0'} mm</span>
+        <span className="w-6 h-6 rounded-full bg-emerald-500 text-slate-950 flex items-center justify-center text-xs">✓</span>
+      </button>
     </div>
   );
 };

@@ -195,6 +195,10 @@ export interface Component {
     visual?: PartVisualDims;
     /** Reducción excéntrica: corrimiento lateral del extremo chico (mm) */
     lateralOffset?: number;
+    /** Codo recortado a un ángulo que no es de catálogo: ángulo del codo de origen (45 o 90) */
+    trimmedFrom?: number;
+    /** Derivación soldada directo al caño (injerto / stub-in), sin accesorio */
+    stubIn?: boolean;
     /** Bloque PCF de origen (piezas importadas) */
     pcf?: PcfSourceBlock;
     /** Identificación del niple para lista de cortes (ej. "N-01") */
@@ -359,6 +363,27 @@ export interface SerializedComponent {
   parameters: Component['parameters'];
 }
 
+/** Tipos de soporte que se marcan en campo */
+export type SupportKind = 'APOYO' | 'GUIA' | 'ANCLAJE' | 'COLGANTE';
+
+/** Soporte marcado sobre un caño: un punto del eje, no corta la cañería */
+export interface SupportMark {
+  id: string;
+  kind: SupportKind;
+  /** Punto sobre el eje del caño (mm) */
+  position: THREE.Vector3;
+  nominalDiameter: number;
+  tag?: string;
+}
+
+export interface SerializedSupport {
+  id: string;
+  kind: SupportKind;
+  position: [number, number, number];
+  nominalDiameter: number;
+  tag?: string;
+}
+
 export interface SerializedJoint {
   id: string;
   type: JointType;
@@ -380,4 +405,5 @@ export interface SerializedGraphState {
   joints: Record<string, SerializedJoint>;
   activeLineNumber?: string;
   pcf?: PcfGraphInfo;
+  supports?: SerializedSupport[];
 }

@@ -2,6 +2,7 @@ import React from 'react';
 import { usePipingStore } from '../store/usePipingStore';
 import { useUiConfigStore, ToolsLayoutMode } from '../store/useUiConfigStore';
 import { FloatingPalette } from './FloatingPalette';
+import { usePhoneLayout } from './useIsPhone';
 
 export const QuickToolPalette: React.FC = () => {
   const nominalDiameter = usePipingStore((s) => s.nominalDiameter);
@@ -9,6 +10,7 @@ export const QuickToolPalette: React.FC = () => {
   const insertFitting = usePipingStore((s) => s.insertFitting);
   const toggleToolPalette = usePipingStore((s) => s.toggleToolPalette);
 
+  const phone = usePhoneLayout();
   const toolsLayout = useUiConfigStore((s) => s.toolsLayout);
   const setToolsLayout = useUiConfigStore((s) => s.setToolsLayout);
 
@@ -49,8 +51,9 @@ export const QuickToolPalette: React.FC = () => {
           {nominalDiameter}&quot;
         </span>
       }
+      sheetBodyClassName="grid grid-cols-5 landscape:grid-cols-3 gap-2 p-3 w-full [&>button]:min-h-[60px] [&>button]:min-w-0 [&>button]:rounded-xl [&_span]:text-[11px] [&_svg]:w-7 [&_svg]:h-6"
       headerActions={
-        <button
+        phone ? undefined : <button
           type="button"
           onClick={cycleLayout}
           className="w-5 h-5 rounded bg-[#262c3a] hover:bg-[#343c4e] border border-[#3a4254] text-amber-300 flex items-center justify-center text-[9px] font-mono font-bold active:scale-90 transition-all"

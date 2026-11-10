@@ -81,6 +81,20 @@ export class PcfExporter {
       if (isogen && code && comp.parameters.description) materials.set(code, comp.parameters.description);
     }
 
+    // Soportes marcados en la app: solo en el PCF de isométricos (Plant no los toma en PCF to Pipe)
+    if (isogen) {
+      const skeys = { APOYO: 'SKID', GUIA: 'GUID', ANCLAJE: 'ANCH', COLGANTE: '01HG' } as const;
+      for (const s of graph.liveSupports()) {
+        lines.push(
+          'SUPPORT',
+          `${IND}CO-ORDS ${point(s.position)} ${formatBore(s.nominalDiameter, boreUnits)}`,
+          `${IND}SKEY ${skeys[s.kind]}`,
+          `${IND}NAME ${s.tag || s.kind}`,
+          `${IND}SUPPORT-DIRECTION ${s.kind === 'COLGANTE' ? 'UP' : 'DOWN'}`
+        );
+      }
+    }
+
     if (isogen && (options.includeWeldsAndFasteners ?? true)) {
       let n = 1;
       for (const joint of graph.joints.values()) lines.push(...PcfExporter.jointBlocks(joint, graph, boreUnits, n++, materials));

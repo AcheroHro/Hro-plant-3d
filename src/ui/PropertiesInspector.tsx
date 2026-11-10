@@ -7,6 +7,7 @@ import {
 } from '../store/useUiConfigStore';
 import { NippleEndFinish } from '../types/piping';
 import { FloatingPalette } from './FloatingPalette';
+import { usePhoneLayout } from './useIsPhone';
 
 export const PropertiesInspector: React.FC = () => {
   const graph = usePipingStore((s) => s.graph);
@@ -34,6 +35,7 @@ export const PropertiesInspector: React.FC = () => {
   const isPropertiesConfigOpen = useUiConfigStore((s) => s.isPropertiesConfigOpen);
   const setPropertiesConfigOpen = useUiConfigStore((s) => s.setPropertiesConfigOpen);
 
+  const phone = usePhoneLayout();
   const selectedComp = selectedComponentId ? graph.components.get(selectedComponentId) : null;
   const openPorts = graph.getOpenPorts();
 
@@ -86,7 +88,8 @@ export const PropertiesInspector: React.FC = () => {
       ? graph.resolvePortEndFinish(selectedComp.ports[1], selectedComp.parameters.endFinish2)
       : 'Bisel';
 
-  const isExpanded = Boolean(selectedComp) && !propertiesPalette.isCollapsed;
+  // En el teléfono el panel se abre desde la barra de pestañas: con una pieza elegida ya muestra sus datos
+  const isExpanded = Boolean(selectedComp) && (Boolean(phone) || !propertiesPalette.isCollapsed);
 
   const handleTogglePropertiesButton = () => {
     vibrate(15);
@@ -147,7 +150,10 @@ export const PropertiesInspector: React.FC = () => {
         paletteId="properties"
         title="Propiedades"
         icon="📋"
-        forceCollapsed={!selectedComp || propertiesPalette.isCollapsed}
+        forceCollapsed={!isExpanded}
+        sheetEmptyHint="Tocá un caño o un accesorio en el modelo para ver y editar sus datos."
+        sheetBodyClassName="w-full p-2.5 space-y-2 text-xs"
+        sheetZoom={1.15}
         onToggleCollapseOverride={handleTogglePropertiesButton}
         badge={
           selectedComp ? (
@@ -163,7 +169,7 @@ export const PropertiesInspector: React.FC = () => {
         headerActions={
           <div className="flex items-center gap-1">
             {/* Botón explícito "Propiedades" para desplegar cuando hay pieza seleccionada */}
-            {selectedComp && (
+            {selectedComp && !phone && (
               <button
                 type="button"
                 onClick={(e) => {

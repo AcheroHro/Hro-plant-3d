@@ -14,10 +14,43 @@ import {
 import { saveGraphToIndexedDb, loadActiveProject, ProjectRecord } from '../persistence/indexedDbStorage';
 import { detectPipingCollisions } from '../viewport/collision/collisionDetector';
 import { calculateElbowPlacement } from '../core/math/elbowSolver';
-import { SerializedGraphState, FieldWeldKind, ComponentType, NippleEndFinish, Port, SpecFitting } from '../types/piping';
+import { SerializedGraphState, FieldWeldKind, ComponentType, NippleEndFinish, Port, SpecFitting, SupportKind } from '../types/piping';
 import { PcfImporter } from '../core/importers/PcfImporter';
+import { RoutePlan, planConnectionRoutes } from '../core/routing/connectRoutes';
+import { applySlope, centerlineForElevation, deflect, elbowForBend, planOffset, trimmedTakeOff } from '../core/routing/routeMath';
 
 export type CameraMode = 'INSPECT_MODE' | 'ROUTE_MODE';
+
+/** Qué se muestra cuando se aísla: una línea por su número, o un tramo conectado */
+export type Isolation = { kind: 'line'; line: string } | { kind: 'run'; ids: string[] };
+
+/** Caja de corte del modelo, en mm */
+export interface SectionBox {
+  min: [number, number, number];
+  max: [number, number, number];
+}
+
+/** Número de línea de una pieza: el suyo o, si no tiene, el de la línea activa */
+export function lineOf(graph: PipingGraph, comp: { parameters: { lineNumber?: string } }): string {
+  return comp.parameters.lineNumber || graph.activeLineNumber || '';
+}
+
+/** Piezas visibles con el aislamiento actual; null = se ve todo */
+export function isolatedIds(graph: PipingGraph, isolation: Isolation | null): Set<string> | null {
+  if (!isolation) return null;
+  if (isolation.kind === 'run') return new Set(isolation.ids);
+  const ids = new Set<string>();
+  for (const comp of graph.components.values()) if (lineOf(graph, comp) === isolation.line) ids.add(comp.id);
+  return ids;
+}
+
+export interface PieceMenuState {
+  x: number;
+  y: number;
+  componentId: string;
+  /** En caños: distancia del punto tocado al inicio del caño (mm) */
+  offsetMm?: number;
+}
 
 export interface PipingState {
   graph: PipingGraph;
@@ -41,6 +74,8 @@ export interface PipingState {
   canRedo: boolean;
   version: number;
   triggerFrameAll: number;
+  /** Pedido de encuadrar una pieza (la lista de avisos); seq cambia en cada pedido */
+  focusRequest: { id: string; seq: number } | null;
   cameraViewPreset: { azimuth: number; polar: number; seq: number } | null;
   /** Familia de Plant fijada por el usuario para cada tipo de pieza (PartFamilyId) */
   preferredFamilies: Record<string, string>;
@@ -49,8 +84,68 @@ export interface PipingState {
   /** Colorear el modelo por spool */
   spoolView: boolean;
   isSpoolsOpen: boolean;
+  /** Conectar a otra boca: esperando que se toque la boca de destino */
+  connectPicking: boolean;
+  connectTargetId: string | null;
+  /** Recorridos posibles hasta la boca de destino; el elegido se ve en el modelo */
+  connectRoutes: RoutePlan[];
+  connectIndex: number;
+  /** Vista: solo se dibuja una línea o un tramo conectado */
+  isolation: Isolation | null;
+  /** Medir: puntos tocados en el modelo (dos hacen una medida) */
+  measureActive: boolean;
+  measurePoints: THREE.Vector3[];
+  sectionBox: SectionBox | null;
+  /** Giro libre: grados que se desvía la línea al tocar un eje; null = sale derecho por el eje */
+  turnAngleDeg: number | null;
+  /** Pendiente de los tramos horizontales en % (positiva sube, negativa baja; 0 = a nivel) */
+  slopePct: number;
+  /** Último eje tocado y la dirección que resultó (para resaltarlo aunque el trazado salga inclinado) */
+  routeAxis: { axis: THREE.Vector3; result: THREE.Vector3 } | null;
+  /** Menú de la pieza que se mantuvo apretada (posición en pantalla y punto tocado del caño) */
+  pieceMenu: PieceMenuState | null;
+  /** Selección múltiple: los toques suman o quitan piezas en vez de elegir una sola */
+  multiMode: boolean;
+  multiSelect: string[];
 
   // Acciones
+  openPieceMenu: (menu: PieceMenuState) => void;
+  closePieceMenu: () => void;
+  /** Cambia el largo de un caño dejando quieto el extremo `anchor` */
+  stretchPipe: (componentId: string, newLengthMm: number, anchor: 'start' | 'end') => void;
+  /** Sustituye en el lugar el codo o la válvula elegidos por otra familia (y otro ángulo en codos) */
+  substituteSelected: (familyId?: string, angle?: number) => void;
+  toggleMultiMode: (on?: boolean) => void;
+  toggleMultiComponent: (componentId: string) => void;
+  selectConnectedRun: () => void;
+  deleteMulti: () => void;
+  moveMulti: (delta: THREE.Vector3, copy: boolean) => void;
+  startConnectPicking: () => void;
+  pickConnectTarget: (portId: string) => void;
+  cycleConnectRoute: (delta: number) => void;
+  confirmConnect: () => void;
+  setTurnAngle: (deg: number | null) => void;
+  isolateLine: (line: string) => void;
+  /** Aísla todo lo que está conectado a una pieza */
+  isolateRun: (componentId: string) => void;
+  clearIsolation: () => void;
+  toggleMeasure: (on?: boolean) => void;
+  addMeasurePoint: (point: THREE.Vector3) => void;
+  /** Caja de corte alrededor de la pieza elegida (o de la boca activa, o de todo el modelo) */
+  setSectionAround: (marginMm: number) => void;
+  /** Corre una cara de la caja de corte */
+  nudgeSection: (axis: 0 | 1 | 2, side: 'min' | 'max', deltaMm: number) => void;
+  clearSection: () => void;
+  setSlope: (pct: number) => void;
+  /** Desvío simple o rodado: dos codos y un diagonal para correr la línea `offset` y seguir derecho */
+  applyOffset: (offset: THREE.Vector3, angleDeg: number, tailMm?: number) => void;
+  /** Prepara el tramo vertical para llegar a una elevación por eje, fondo (BOP) o lomo (TOP) */
+  goToElevation: (target: number, ref: 'CL' | 'BOP' | 'TOP') => void;
+  /** Derivación sobre un caño sin cortarlo: olet de la spec o injerto directo */
+  addBranchOnPipe: (componentId: string, offsetMm: number, dir: THREE.Vector3, branchNd: number) => void;
+  addSupportOnPipe: (componentId: string, offsetMm: number, kind: SupportKind) => void;
+  removeSupport: (supportId: string) => void;
+  cancelConnect: () => void;
   /** Carga la spec y el proyecto activo; devuelve el proyecto abierto */
   initialize: () => Promise<ProjectRecord | null>;
   /** Reemplaza el modelo (al abrir otro proyecto): limpia deshacer y encuadra */
@@ -94,6 +189,8 @@ export interface PipingState {
   undo: () => void;
   redo: () => void;
   frameAll: () => void;
+  /** Elige una pieza y lleva la cámara a ella, aunque estuviera oculta por un aislamiento o un corte */
+  focusComponent: (compId: string) => void;
   toggleBom: () => void;
   toggleExport: () => void;
   toggleToolPalette: () => void;
@@ -106,6 +203,9 @@ export interface PipingState {
   importPcfFile: (content: string, fileName: string) => SerializedGraphState | null;
 }
 
+/** Mientras se arma un recorrido de conexión, los cambios de boca activa son parte de la operación */
+let connectExecuting = false;
+
 export const usePipingStore = create<PipingState>((set, get) => {
   // Historial de snapshots para Undo / Redo 100% fiable
   let undoSnapshots: SerializedGraphState[] = [];
@@ -117,6 +217,72 @@ export const usePipingStore = create<PipingState>((set, get) => {
     if (undoSnapshots.length > 50) undoSnapshots.shift();
     redoSnapshots = [];
     set({ canUndo: true, canRedo: false });
+  };
+
+  /** Codo para un giro de `bendDeg`: de catálogo si da, o recortado si la spec es para soldar a tope */
+  const elbowForTurn = (
+    nd: number,
+    bendDeg: number,
+    port?: Port | null
+  ): { spec: SpecFitting; takeOff: number; trimmedFrom?: number } | { error: string } => {
+    const { specReader, specCode } = get();
+    if (!specReader) return { error: 'No hay spec cargada.' };
+    const has45 = !!specReader.findElbow(nd, 45, specCode, findOpts(port));
+    const choice = elbowForBend(bendDeg, has45);
+    if (!choice) return { error: `Giro de ${bendDeg.toFixed(0)}°: un codo no gira más de 90°. Hacelo en dos tramos.` };
+    const spec = specReader.findElbow(nd, choice.baseAngle, specCode, findOpts(port));
+    if (!spec) return { error: `No se encontró codo de ${choice.baseAngle}° para ND ${nd}" en catálogo.` };
+    const rad = THREE.MathUtils.degToRad(bendDeg);
+    const catalogTakeOff = spec.takeOff || (spec.radius ? spec.radius * Math.tan(rad / 2) : 76.2);
+    if (!choice.trimmed) return { spec, takeOff: catalogTakeOff };
+    const end = spec.plantEndTypes?.[0];
+    const buttWeld = end ? end.toUpperCase() === 'BV' : spec.endType === 'BW';
+    if (!buttWeld) {
+      return { error: `Giro de ${bendDeg.toFixed(1)}°: los codos de esta spec (${end || spec.endType}) no se pueden recortar. Usá 45° o 90°.` };
+    }
+    const radius = spec.radius || catalogTakeOff / Math.tan(THREE.MathUtils.degToRad(choice.baseAngle) / 2);
+    return { spec, takeOff: trimmedTakeOff(radius, bendDeg), trimmedFrom: choice.baseAngle };
+  };
+
+  /** Dirección de trazado que resulta de tocar un eje, según el giro libre y la pendiente activos */
+  const routeDirectionFor = (axis: THREE.Vector3): THREE.Vector3 => {
+    const { graph, selectedPortId, turnAngleDeg, slopePct } = get();
+    const port = selectedPortId ? graph.ports.get(selectedPortId) : null;
+    const a = axis.clone().normalize();
+    if (turnAngleDeg !== null && port && !port.connectedJointId) return deflect(port.direction, a, turnAngleDeg);
+    return applySlope(a, slopePct);
+  };
+
+  /**
+   * Traza varios tramos seguidos como un solo paso de deshacer. Si uno falla deja el modelo como estaba
+   * y devuelve el motivo; si sale bien devuelve null.
+   */
+  const traceLegs = (legs: { dir: THREE.Vector3; length: number }[]): string | null => {
+    const undoBefore = undoSnapshots.length;
+    const keepNumpad = get().numpadValue;
+    connectExecuting = true;
+    try {
+      for (const leg of legs) {
+        const before = get().selectedPortId;
+        set({ activeDirection: leg.dir.clone(), numpadValue: String(Math.round(leg.length * 100) / 100) });
+        get().applyRouting();
+        if (get().selectedPortId === before) {
+          const why = get().statusMessage;
+          if (undoSnapshots.length > undoBefore) {
+            undoSnapshots.length = undoBefore + 1;
+            get().undo();
+            redoSnapshots.pop();
+          }
+          set({ numpadValue: keepNumpad, canRedo: redoSnapshots.length > 0 });
+          return why;
+        }
+      }
+      undoSnapshots.length = undoBefore + 1;
+      set({ numpadValue: keepNumpad });
+      return null;
+    } finally {
+      connectExecuting = false;
+    }
   };
 
   /** Opciones de selección según el puerto donde se conecta (extremo y clase de Plant) */
@@ -193,12 +359,27 @@ export const usePipingStore = create<PipingState>((set, get) => {
     isBomOpen: false,
     spoolView: false,
     isSpoolsOpen: false,
+    connectPicking: false,
+    connectTargetId: null,
+    connectRoutes: [],
+    connectIndex: 0,
+    isolation: null,
+    measureActive: false,
+    measurePoints: [],
+    sectionBox: null,
+    turnAngleDeg: null,
+    slopePct: 0,
+    routeAxis: null,
+    pieceMenu: null,
+    multiMode: false,
+    multiSelect: [],
     isExportOpen: false,
     isToolPaletteOpen: false,
     canUndo: false,
     canRedo: false,
     version: 0,
     triggerFrameAll: 0,
+    focusRequest: null,
     cameraViewPreset: null,
     preferredFamilies: {},
     specNotes: [],
@@ -352,34 +533,286 @@ export const usePipingStore = create<PipingState>((set, get) => {
     setCameraMode: (mode) => set({ cameraMode: mode }),
 
     setActiveDirection: (dir) => {
+      const result = routeDirectionFor(dir);
+      const { turnAngleDeg, slopePct } = get();
+      const plain = result.distanceTo(dir.clone().normalize()) < 1e-6;
+      const how = plain ? '' : turnAngleDeg !== null ? ` con giro de ${turnAngleDeg}°` : ` con pendiente de ${slopePct}%`;
       set({
-        activeDirection: dir.clone().normalize(),
-        statusMessage: `Vector director activo: [${dir.x}, ${dir.y}, ${dir.z}]`
+        activeDirection: result,
+        routeAxis: { axis: dir.clone().normalize(), result: result.clone() },
+        statusMessage: `Dirección de trazado: [${dir.x}, ${dir.y}, ${dir.z}]${how}`
       });
+    },
+
+    isolateLine: (line) => {
+      const count = isolatedIds(get().graph, { kind: 'line', line })?.size ?? 0;
+      if (!count) return set({ statusMessage: `No hay piezas en la línea ${line}.` });
+      set({
+        isolation: { kind: 'line', line },
+        triggerFrameAll: get().triggerFrameAll + 1,
+        statusMessage: `Aislada la línea ${line}: ${count} pieza${count === 1 ? '' : 's'}. El resto del modelo queda oculto.`
+      });
+    },
+
+    isolateRun: (componentId) => {
+      const { graph } = get();
+      if (!graph.components.has(componentId)) return;
+      const ids = graph.connectedRun(componentId);
+      set({
+        isolation: { kind: 'run', ids },
+        triggerFrameAll: get().triggerFrameAll + 1,
+        statusMessage: `Aislado el tramo conectado: ${ids.length} pieza${ids.length === 1 ? '' : 's'}. El resto del modelo queda oculto.`
+      });
+    },
+
+    clearIsolation: () => {
+      if (!get().isolation) return;
+      set({ isolation: null, triggerFrameAll: get().triggerFrameAll + 1, statusMessage: 'Se muestra todo el modelo.' });
+    },
+
+    toggleMeasure: (on) => {
+      const next = on ?? !get().measureActive;
+      set({
+        measureActive: next,
+        measurePoints: [],
+        statusMessage: next ? 'Medir: tocá el primer punto sobre una pieza (se pega a bocas y ejes).' : 'Medir terminado.'
+      });
+    },
+
+    addMeasurePoint: (point) => {
+      const prev = get().measurePoints;
+      // Con una medida completa, el toque siguiente empieza otra
+      const points = prev.length >= 2 ? [point.clone()] : [...prev, point.clone()];
+      if (points.length < 2) return set({ measurePoints: points, statusMessage: 'Medir: tocá el segundo punto.' });
+      const d = points[1].clone().sub(points[0]);
+      set({
+        measurePoints: points,
+        statusMessage: `Distancia ${Math.round(d.length())} mm • ΔX ${Math.round(Math.abs(d.x))} • ΔY ${Math.round(Math.abs(d.y))} • ΔZ ${Math.round(Math.abs(d.z))}`
+      });
+    },
+
+    setSectionAround: (marginMm) => {
+      const { graph, selectedComponentId, selectedPortId } = get();
+      const box = new THREE.Box3();
+      const comp = selectedComponentId ? graph.components.get(selectedComponentId) : null;
+      const port = selectedPortId ? graph.ports.get(selectedPortId) : null;
+      let around = 'todo el modelo';
+      if (comp) {
+        for (const p of comp.ports) box.expandByPoint(p.position);
+        for (const pt of comp.centerline) box.expandByPoint(pt);
+        around = 'la pieza elegida';
+      } else if (port) {
+        box.expandByPoint(port.position);
+        around = 'la boca activa';
+      } else {
+        for (const c of graph.components.values()) for (const p of c.ports) box.expandByPoint(p.position);
+      }
+      if (box.isEmpty()) return set({ statusMessage: 'Caja de corte: no hay modelo para cortar.' });
+      box.expandByScalar(Math.max(100, marginMm));
+      set({
+        sectionBox: { min: box.min.toArray() as [number, number, number], max: box.max.toArray() as [number, number, number] },
+        statusMessage: `Caja de corte a ${Math.round(marginMm)} mm alrededor de ${around}. Lo de afuera no se dibuja.`
+      });
+    },
+
+    nudgeSection: (axis, side, deltaMm) => {
+      const box = get().sectionBox;
+      if (!box) return;
+      const next: SectionBox = { min: [...box.min], max: [...box.max] };
+      next[side][axis] += deltaMm;
+      // La caja no se da vuelta: queda al menos de 100 mm
+      if (next.max[axis] - next.min[axis] < 100) return;
+      set({ sectionBox: next });
+    },
+
+    clearSection: () => {
+      if (!get().sectionBox) return;
+      set({ sectionBox: null, statusMessage: 'Caja de corte apagada.' });
+    },
+
+    setTurnAngle: (deg) => {
+      const angle = deg !== null && deg > 0 && deg < 90 ? deg : null;
+      set({ turnAngleDeg: angle });
+      const last = get().routeAxis;
+      if (last) get().setActiveDirection(last.axis);
+      set({
+        statusMessage:
+          angle === null
+            ? 'Giro a eje: la línea sale derecho por el eje que toques.'
+            : `Giro libre de ${angle}°: tocá el eje hacia donde se desvía la línea.`
+      });
+    },
+
+    setSlope: (pct) => {
+      const slope = Number.isFinite(pct) ? THREE.MathUtils.clamp(pct, -8, 8) : 0;
+      set({ slopePct: slope });
+      const last = get().routeAxis;
+      if (last) get().setActiveDirection(last.axis);
+      set({
+        statusMessage:
+          slope === 0
+            ? 'Pendiente apagada: los tramos horizontales salen a nivel.'
+            : `Pendiente de ${Math.abs(slope)}% ${slope > 0 ? 'subiendo' : 'bajando'} en los tramos horizontales (${Math.abs(slope) * 10} mm por metro).`
+      });
+    },
+
+    applyOffset: (offset, angleDeg, tailMm) => {
+      const { graph, specReader, selectedPortId, specCode } = get();
+      const port = selectedPortId ? graph.ports.get(selectedPortId) : null;
+      if (!specReader || !port || port.connectedJointId) {
+        set({ statusMessage: 'Desvío: primero tocá la boca libre desde la que sale la línea.' });
+        return;
+      }
+      const nd = port.nominalDiameter;
+      const pipeSpec = specReader.findPipe(nd, specCode);
+      if (!pipeSpec) return set({ statusMessage: `Desvío: la spec no tiene caño de ${nd}".` });
+      const elbow = elbowForTurn(nd, angleDeg, port);
+      if ('error' in elbow) return set({ statusMessage: `Desvío: ${elbow.error}` });
+      const minNipple = Math.max(50, 2 * pipeSpec.outerDiameter);
+      const dir = port.direction.clone().normalize();
+      const plan = planOffset(dir, offset, angleDeg, elbow.takeOff, minNipple);
+      if ('error' in plan) return set({ statusMessage: `Desvío: ${plan.error}` });
+      const tail = tailMm && tailMm > 0 ? tailMm : Math.ceil((elbow.takeOff + minNipple) / 10) * 10;
+      set({ nominalDiameter: nd });
+      const failed = traceLegs([
+        { dir: plan.travelDir, length: plan.travelLength },
+        { dir, length: tail }
+      ]);
+      if (failed) return set({ statusMessage: `Desvío: no se pudo armar. ${failed}` });
+      set({
+        routeAxis: null,
+        statusMessage: `Desvío de ${Math.round(plan.offset)} mm con dos codos de ${angleDeg}°: diagonal de ${Math.round(plan.travelLength)} mm entre vértices, avanza ${Math.round(plan.advance)} mm.`
+      });
+    },
+
+    goToElevation: (target, ref) => {
+      const { graph, selectedPortId } = get();
+      const port = selectedPortId ? graph.ports.get(selectedPortId) : null;
+      if (!port || port.connectedJointId || !Number.isFinite(target)) {
+        set({ statusMessage: 'Elevación: primero tocá la boca libre desde la que sale la línea.' });
+        return;
+      }
+      const targetCl = centerlineForElevation(target, ref, port.outerDiameter);
+      // El tramo vertical se mide desde el vértice del codo: si el caño anterior no se puede recortar,
+      // el vértice queda un centro a cara más adelante (importa cuando la línea viene con pendiente)
+      let fromZ = port.position.z;
+      const vertical = Math.abs(port.direction.z) > 0.99;
+      if (!vertical && Math.abs(port.direction.z) > 1e-6) {
+        const up0 = new THREE.Vector3(0, 0, targetCl > fromZ ? 1 : -1);
+        const bend = THREE.MathUtils.radToDeg(Math.acos(THREE.MathUtils.clamp(port.direction.dot(up0), -1, 1)));
+        const elbow = elbowForTurn(port.nominalDiameter, bend, port);
+        const prev = graph.components.get(port.componentId);
+        if (!('error' in elbow)) {
+          const prevLen = prev?.type === 'PIPE' ? prev.ports[0].position.distanceTo(prev.ports[1].position) : 0;
+          const canCut = prevLen >= elbow.takeOff + Math.max(50, 2 * port.outerDiameter);
+          if (!canCut) fromZ += port.direction.z * elbow.takeOff;
+        }
+      }
+      const delta = targetCl - fromZ;
+      const name = ref === 'CL' ? 'el eje' : ref === 'BOP' ? 'el fondo de caño (BOP)' : 'el lomo de caño (TOP)';
+      if (Math.abs(delta) < 1) return set({ statusMessage: `Elevación: ${name} ya está en ${Math.round(target)} mm.` });
+      const up = delta > 0;
+      if (vertical && port.direction.z > 0 !== up) {
+        set({ statusMessage: `Elevación: la boca mira hacia ${up ? 'abajo' : 'arriba'} y hay que ${up ? 'subir' : 'bajar'}. Salí primero en horizontal.` });
+        return;
+      }
+      const dir = new THREE.Vector3(0, 0, up ? 1 : -1);
+      set({
+        activeDirection: dir,
+        routeAxis: { axis: dir.clone(), result: dir.clone() },
+        numpadValue: String(Math.round(Math.abs(delta) * 10) / 10),
+        statusMessage: `Elevación: ${up ? 'subí' : 'bajá'} ${Math.round(Math.abs(delta))} mm para dejar ${name} en ${Math.round(target)} mm. Tocá TRAZAR.`
+      });
+    },
+
+    addBranchOnPipe: (componentId, offsetMm, dir, branchNd) => {
+      const { graph, specReader, specCode } = get();
+      const pipe = graph.components.get(componentId);
+      if (!specReader || !pipe || pipe.type !== 'PIPE') return;
+      const headerNd = pipe.parameters.nominalDiameter;
+      const branchSpec = specReader.findPipe(branchNd, specCode);
+      if (!branchSpec) return set({ statusMessage: `Derivación: la spec no tiene caño de ${branchNd}".` });
+      const oletSpec =
+        branchNd < headerNd ? specReader.findFitting({ partType: 'OLET', nominalDiameter: headerNd, reducedNominalDiameter: branchNd }) : null;
+      pushUndoSnapshot();
+      try {
+        const comp = graph.addBranchOnPipe(componentId, offsetMm, dir, branchSpec, oletSpec);
+        const port = comp.ports[0];
+        saveGraphToIndexedDb(graph.serialize());
+        set({
+          selectedPortId: port.id,
+          selectedComponentId: comp.id,
+          activeDirection: port.direction.clone().normalize(),
+          routeAxis: null,
+          nominalDiameter: branchNd,
+          collidingComponentIds: detectPipingCollisions(graph).collidingComponentIds,
+          version: get().version + 1,
+          statusMessage: oletSpec
+            ? `Derivación con ${oletSpec.shortDescription}. Seguí trazando el ramal de ${branchNd}".`
+            : `Injerto directo (stub-in) de ${branchNd}" sobre ${headerNd}": la spec no tiene olet para esa medida. Seguí trazando el ramal.`
+        });
+      } catch (e) {
+        undoSnapshots.pop();
+        set({ canUndo: undoSnapshots.length > 0, statusMessage: `Derivación: ${(e as Error).message}` });
+      }
+    },
+
+    addSupportOnPipe: (componentId, offsetMm, kind) => {
+      const { graph } = get();
+      pushUndoSnapshot();
+      try {
+        const mark = graph.addSupport(componentId, offsetMm, kind);
+        saveGraphToIndexedDb(graph.serialize());
+        const names: Record<SupportKind, string> = { APOYO: 'Apoyo', GUIA: 'Guía', ANCLAJE: 'Anclaje', COLGANTE: 'Colgante' };
+        set({
+          version: get().version + 1,
+          statusMessage: `${names[kind]} marcado en el caño, a elevación ${Math.round(mark.position.z)} mm de eje.`
+        });
+      } catch (e) {
+        undoSnapshots.pop();
+        set({ canUndo: undoSnapshots.length > 0, statusMessage: (e as Error).message });
+      }
+    },
+
+    removeSupport: (supportId) => {
+      const { graph } = get();
+      if (!graph.supports.has(supportId)) return;
+      pushUndoSnapshot();
+      graph.removeSupport(supportId);
+      saveGraphToIndexedDb(graph.serialize());
+      set({ version: get().version + 1, statusMessage: 'Soporte quitado.' });
     },
 
     setNominalDiameter: (nd) => {
       const { graph, specReader, selectedPortId, specCode } = get();
       if (!specReader) return;
 
-      const currentND = get().nominalDiameter;
-      if (nd !== currentND && selectedPortId) {
+      if (selectedPortId) {
         const port = graph.ports.get(selectedPortId);
-        if (port && !port.connectedJointId) {
-          const reducerSpec = nd < currentND ? specReader.findReducer(currentND, nd, specCode, findOpts(port)) : null;
+        // Cambio de diámetro en ruta: reducción (o ampliación) de la spec en la boca activa
+        const portNd = port?.nominalDiameter ?? nd;
+        if (port && !port.connectedJointId && Math.abs(nd - portNd) > 1e-6) {
+          const reducerSpec = specReader.findReducer(portNd, nd, specCode, findOpts(port));
           if (reducerSpec && reducerSpec.faceToFace) {
             pushUndoSnapshot();
             const start = flangeOffFaceIfNeeded(port);
-            const comp = graph.addReducer(start.port, reducerSpec);
+            const comp = graph.addReducer(start.port, reducerSpec, nd > portNd);
             saveGraphToIndexedDb(graph.serialize());
             set({
               selectedPortId: comp.ports[1].id,
+              selectedComponentId: comp.id,
+              activeDirection: comp.ports[1].direction.clone().normalize(),
               nominalDiameter: nd,
               version: get().version + 1,
               statusMessage: `${reducerSpec.shortDescription} insertada (${reducerSpec.faceToFace.toFixed(1)} mm).${start.note}${geomWarn(reducerSpec)}`
             });
             return;
           }
+          set({
+            nominalDiameter: nd,
+            statusMessage: `Diámetro ${nd}": la spec no tiene reducción desde ${portNd}", así que la boca activa sigue en ${portNd}".`
+          });
+          return;
         }
       }
 
@@ -426,6 +859,7 @@ export const usePipingStore = create<PipingState>((set, get) => {
           selectedPortId: port.id,
           selectedComponentId: port.componentId,
           activeDirection: port.direction.clone().normalize(),
+          nominalDiameter: port.connectedJointId ? get().nominalDiameter : port.nominalDiameter || get().nominalDiameter,
           statusMessage: `Boca activa seleccionada: Puerto #${port.index} (${port.index === 3 ? 'Ramal 90°' : 'Línea Run'}) • Dir: [${port.direction.x.toFixed(1)}, ${port.direction.y.toFixed(1)}, ${port.direction.z.toFixed(1)}]`
         });
       } else {
@@ -450,6 +884,7 @@ export const usePipingStore = create<PipingState>((set, get) => {
           selectedComponentId: comp.id,
           selectedPortId: openPort.id,
           activeDirection: openPort.direction.clone().normalize(),
+          nominalDiameter: openPort.nominalDiameter || get().nominalDiameter,
           statusMessage: `Seleccionado: ${comp.parameters.description || comp.type} (${comp.parameters.nominalDiameter}") • Boca libre #${openPort.index} lista.`
         });
       } else {
@@ -865,18 +1300,23 @@ export const usePipingStore = create<PipingState>((set, get) => {
       const bendAngleRad = Math.acos(THREE.MathUtils.clamp(uIn.dot(uOut), -1, 1));
       const bendAngleDeg = THREE.MathUtils.radToDeg(bendAngleRad);
 
-      // Determinar si corresponde codo de 45° o 90°
-      const targetElbowAngle = Math.abs(bendAngleDeg - 45) < 15 ? 45 : 90;
-      const elbowSpec = specReader.findElbow(nominalDiameter, targetElbowAngle, specCode, findOpts(connectingPort));
-
-      if (!elbowSpec) {
-        set({
-          statusMessage: `No se encontró codo de ${targetElbowAngle}° para ND ${nominalDiameter}" en catálogo.`
-        });
+      // Codo de catálogo si el giro da 45° o 90° (con tolerancia); si no, recortado al ángulo
+      const turn = elbowForTurn(nominalDiameter, bendAngleDeg, connectingPort);
+      if ('error' in turn) {
+        set({ statusMessage: turn.error });
         return;
       }
-
-      const takeOff = elbowSpec.takeOff || (elbowSpec.radius ? elbowSpec.radius * Math.tan(bendAngleRad / 2) : 76.2);
+      const elbowSpec = turn.spec;
+      const takeOff = turn.takeOff;
+      const addElbow = (placement: Parameters<typeof graph.addElbow>[0]) => {
+        const elbow = graph.addElbow(placement, elbowSpec);
+        if (turn.trimmedFrom) {
+          elbow.parameters.trimmedFrom = turn.trimmedFrom;
+          elbow.parameters.takeOff = takeOff;
+          elbow.parameters.description = `${elbowSpec.shortDescription} · recortado a ${bendAngleDeg.toFixed(1)}°`;
+        }
+        return elbow;
+      };
 
       let pStart = startPoint.clone();
       let vertex = startPoint.clone();
@@ -914,11 +1354,20 @@ export const usePipingStore = create<PipingState>((set, get) => {
           const cutPoint1 = vertex.clone().sub(uIn.clone().multiplyScalar(takeOff));
           const netIncoming = prevStart.distanceTo(cutPoint1);
 
+          // El caño se rehace más corto: conserva la unión que tenía aguas arriba
+          const upJointId = prevPipeComp.ports[0].connectedJointId;
+          const upJoint = upJointId ? graph.joints.get(upJointId) : undefined;
+          const upPortId = upJoint ? (upJoint.portAId === prevPipeComp.ports[0].id ? upJoint.portBId : upJoint.portAId) : null;
+
           graph.removeComponent(prevPipeComp.id);
           const newPrevPipe = graph.addPipe(prevStart, cutPoint1, pipeSpec, netIncoming);
+          if (upJoint && upPortId) {
+            const rejoined = graph.connectPorts(upPortId, newPrevPipe.ports[0].id, upJoint.type, { gapMm: upJoint.gapMm });
+            Object.assign(rejoined, { ...upJoint, id: rejoined.id, portAId: rejoined.portAId, portBId: rejoined.portBId });
+          }
 
           const placement = calculateElbowPlacement(prevStart, vertex, pNext, takeOff, elbowSpec.radius);
-          const elbow = graph.addElbow(placement, elbowSpec);
+          const elbow = addElbow(placement);
           graph.connectPorts(newPrevPipe.ports[1].id, elbow.ports[0].id);
 
           const netOutgoing = placement.netLengthOutgoing;
@@ -936,7 +1385,7 @@ export const usePipingStore = create<PipingState>((set, get) => {
           });
         } else {
           const placement = calculateElbowPlacement(pStart, vertex, pNext, takeOff, elbowSpec.radius);
-          const elbow = graph.addElbow(placement, elbowSpec);
+          const elbow = addElbow(placement);
           graph.connectPorts(connectingPort.id, elbow.ports[0].id);
 
           const netOutgoing = placement.netLengthOutgoing;
@@ -957,6 +1406,270 @@ export const usePipingStore = create<PipingState>((set, get) => {
         const err = e as Error;
         set({ statusMessage: `Error al calcular codo: ${err.message}` });
       }
+    },
+
+    startConnectPicking: () => {
+      const { graph, selectedPortId, connectPicking } = get();
+      if (connectPicking) {
+        get().cancelConnect();
+        return;
+      }
+      const start = selectedPortId ? graph.ports.get(selectedPortId) : null;
+      if (!start || start.connectedJointId) {
+        set({ statusMessage: 'Conectar: primero tocá la boca libre desde la que querés salir.' });
+        return;
+      }
+      if (graph.getOpenPorts().length < 2) {
+        set({ statusMessage: 'Conectar: no hay otra boca libre a la que llegar.' });
+        return;
+      }
+      set({
+        connectPicking: true,
+        connectTargetId: null,
+        connectRoutes: [],
+        connectIndex: 0,
+        statusMessage: 'Conectar: tocá en el modelo la boca libre de destino.'
+      });
+    },
+
+    pickConnectTarget: (portId) => {
+      const { graph, specReader, selectedPortId, specCode } = get();
+      const start = selectedPortId ? graph.ports.get(selectedPortId) : null;
+      const target = graph.ports.get(portId);
+      const fail = (statusMessage: string) => set({ connectTargetId: null, connectRoutes: [], connectIndex: 0, statusMessage });
+      if (!specReader || !start || start.connectedJointId) return fail('Conectar: no hay una boca activa libre.');
+      if (!target || target.connectedJointId) return fail('Conectar: esa boca ya está unida.');
+      if (target.id === start.id || target.componentId === start.componentId) {
+        return fail('Conectar: elegí una boca de otra pieza.');
+      }
+      if (isFaceEnd(start) || isFaceEnd(target)) {
+        return fail('Conectar: una de las bocas es una cara de brida. Poné antes su contrabrida o un caño y volvé a intentar.');
+      }
+      const nd = start.nominalDiameter;
+      if (target.nominalDiameter !== nd) {
+        return fail(`Conectar: las bocas son de distinto diámetro (${nd}" y ${target.nominalDiameter}"). Poné antes una reducción.`);
+      }
+      const pipeSpec = specReader.findPipe(nd, specCode);
+      const elbowSpec = specReader.findElbow(nd, 90, specCode, findOpts(start));
+      if (!pipeSpec || !elbowSpec) return fail(`Conectar: la spec no tiene caño o codo de 90° en ${nd}".`);
+      const takeOff = elbowSpec.takeOff || elbowSpec.radius || 76.2;
+      const minNipple = Math.max(50, 2 * pipeSpec.outerDiameter);
+      const routes = planConnectionRoutes(start.position, start.direction, target.position, target.direction, { takeOff, minNipple });
+      if (routes.length === 0) {
+        return fail('Conectar: no hay un recorrido a 90° entre esas bocas (están muy cerca, en ángulo o de espaldas). Trazá a mano.');
+      }
+      set({
+        connectPicking: false,
+        connectTargetId: target.id,
+        connectRoutes: routes,
+        connectIndex: 0,
+        statusMessage: `Conectar: ${routes.length} recorrido${routes.length > 1 ? 's' : ''} posible${routes.length > 1 ? 's' : ''}. Elegí uno y confirmá.`
+      });
+    },
+
+    cycleConnectRoute: (delta) => {
+      const n = get().connectRoutes.length;
+      if (n) set({ connectIndex: (get().connectIndex + delta + n) % n });
+    },
+
+    cancelConnect: () => {
+      if (!get().connectPicking && !get().connectRoutes.length) return;
+      set({ connectPicking: false, connectTargetId: null, connectRoutes: [], connectIndex: 0, statusMessage: 'Conectar cancelado.' });
+    },
+
+    confirmConnect: () => {
+      const { graph, connectRoutes, connectIndex, connectTargetId, selectedPortId, numpadValue } = get();
+      const route = connectRoutes[connectIndex];
+      const start = selectedPortId ? graph.ports.get(selectedPortId) : null;
+      if (!route || !connectTargetId || !start) return;
+      const undoBefore = undoSnapshots.length;
+      const clear = { connectPicking: false, connectTargetId: null, connectRoutes: [], connectIndex: 0, numpadValue };
+      // Todo el recorrido es un solo paso de deshacer; si un tramo falla no queda nada a medias
+      const rollback = (why: string) => {
+        if (undoSnapshots.length > undoBefore) {
+          undoSnapshots.length = undoBefore + 1;
+          get().undo();
+          redoSnapshots.pop();
+        }
+        set({ ...clear, canRedo: redoSnapshots.length > 0, statusMessage: `Conectar: no se pudo armar el recorrido. ${why}` });
+      };
+
+      connectExecuting = true;
+      try {
+        set({ nominalDiameter: start.nominalDiameter });
+        for (const leg of route.legs) {
+          const before = get().selectedPortId;
+          set({ activeDirection: leg.dir.clone(), numpadValue: String(Math.round(leg.length * 100) / 100) });
+          get().applyRouting();
+          if (get().selectedPortId === before) return rollback(get().statusMessage);
+        }
+        const lastId = get().selectedPortId;
+        try {
+          if (!lastId) throw new Error('No quedó una boca para unir.');
+          graph.connectPorts(lastId, connectTargetId);
+        } catch (e) {
+          return rollback((e as Error).message);
+        }
+        undoSnapshots.length = undoBefore + 1;
+        saveGraphToIndexedDb(graph.serialize());
+        const open = graph.getOpenPorts();
+        const next = open.length ? open[open.length - 1] : null;
+        set({
+          ...clear,
+          selectedPortId: next ? next.id : null,
+          selectedComponentId: get().selectedComponentId,
+          activeDirection: next ? next.direction.clone().normalize() : get().activeDirection,
+          collidingComponentIds: detectPipingCollisions(graph).collidingComponentIds,
+          version: get().version + 1,
+          canUndo: true,
+          statusMessage: `COMMAND: PLANTPIPEADD • Bocas conectadas con ${route.legs.length} tramo${route.legs.length > 1 ? 's' : ''} y ${route.bends} codo${route.bends === 1 ? '' : 's'} (${Math.round(route.totalLength)} mm de eje a eje).`
+        });
+      } finally {
+        connectExecuting = false;
+      }
+    },
+
+    openPieceMenu: (menu) => set({ pieceMenu: menu }),
+    closePieceMenu: () => set({ pieceMenu: null }),
+
+    stretchPipe: (componentId, newLengthMm, anchor) => {
+      const { graph } = get();
+      const comp = graph.components.get(componentId);
+      if (!comp || comp.type !== 'PIPE' || !(newLengthMm > 10)) return;
+      const moving = anchor === 'start' ? comp.ports[1] : comp.ports[0];
+      if (graph.closesLoopThrough(comp.id, moving.id)) {
+        set({ statusMessage: 'No se puede estirar: la línea cierra un circuito. Cortala primero borrando una pieza.' });
+        return;
+      }
+      pushUndoSnapshot();
+      graph.updatePipeLength(comp.id, newLengthMm, anchor);
+      saveGraphToIndexedDb(graph.serialize());
+      set({
+        collidingComponentIds: detectPipingCollisions(graph).collidingComponentIds,
+        version: get().version + 1,
+        statusMessage: `Largo del caño: ${Math.round(newLengthMm)} mm${moving.connectedJointId ? ' (lo conectado a ese extremo se corrió con él)' : ''}.`
+      });
+    },
+
+    substituteSelected: (familyId, angle) => {
+      const { graph, specReader, selectedComponentId, specCode } = get();
+      const comp = selectedComponentId ? graph.components.get(selectedComponentId) : null;
+      if (!specReader || !comp) return;
+      const nd = comp.ports[0]?.nominalDiameter || comp.parameters.nominalDiameter;
+      const out = comp.ports[1];
+      if (out && graph.closesLoopThrough(comp.id, out.id)) {
+        set({ statusMessage: 'No se puede sustituir: la línea cierra un circuito y la pieza nueva no mide lo mismo.' });
+        return;
+      }
+      try {
+        let updated = null;
+        let name = '';
+        if (comp.type === 'ELBOW') {
+          const target = angle ?? (Math.abs((comp.parameters.angle || 90) - 45) < 15 ? 45 : 90);
+          const spec = specReader.findElbow(nd, target, specCode, { familyId });
+          if (!spec) return set({ statusMessage: `La spec no tiene ese codo de ${target}° en ${nd}".` });
+          pushUndoSnapshot();
+          updated = graph.swapElbow(comp.id, spec, target);
+          name = spec.shortDescription;
+        } else if (comp.type === 'VALVE') {
+          const spec = specReader.findValve(nd, specCode, { familyId });
+          if (!spec) return set({ statusMessage: `La spec no tiene esa válvula en ${nd}".` });
+          pushUndoSnapshot();
+          updated = graph.swapValve(comp.id, spec);
+          name = spec.shortDescription;
+        } else {
+          return set({ statusMessage: 'Por ahora se pueden sustituir en el lugar codos y válvulas.' });
+        }
+        if (!updated) {
+          get().undo();
+          redoSnapshots.pop();
+          return set({ canRedo: redoSnapshots.length > 0, statusMessage: 'No se pudo sustituir esta pieza en el lugar.' });
+        }
+        saveGraphToIndexedDb(graph.serialize());
+        const active = get().selectedPortId ? graph.ports.get(get().selectedPortId!) : null;
+        set({
+          activeDirection: active ? active.direction.clone().normalize() : get().activeDirection,
+          collidingComponentIds: detectPipingCollisions(graph).collidingComponentIds,
+          version: get().version + 1,
+          statusMessage: `COMMAND: PLANTSUBSTITUTE • Pieza sustituida por ${name}. Lo conectado a su salida se acomodó.`
+        });
+      } catch (e) {
+        set({ statusMessage: `No se pudo sustituir: ${(e as Error).message}` });
+      }
+    },
+
+    toggleMultiMode: (on) => {
+      const next = on ?? !get().multiMode;
+      const { selectedComponentId, multiSelect } = get();
+      set({
+        multiMode: next,
+        // Al entrar, la pieza que ya estaba elegida es la primera de la selección
+        multiSelect: next ? (multiSelect.length ? multiSelect : selectedComponentId ? [selectedComponentId] : []) : [],
+        version: get().version + 1,
+        statusMessage: next ? 'Selección múltiple: tocá las piezas que querés mover, copiar o borrar.' : 'Selección múltiple terminada.'
+      });
+    },
+
+    toggleMultiComponent: (componentId) => {
+      const current = get().multiSelect;
+      const next = current.includes(componentId) ? current.filter((id) => id !== componentId) : [...current, componentId];
+      set({ multiSelect: next, version: get().version + 1, statusMessage: `${next.length} pieza${next.length === 1 ? '' : 's'} en la selección.` });
+    },
+
+    selectConnectedRun: () => {
+      const { graph, multiSelect, selectedComponentId } = get();
+      const seeds = multiSelect.length ? multiSelect : selectedComponentId ? [selectedComponentId] : [];
+      const all = new Set<string>();
+      for (const id of seeds) for (const other of graph.connectedRun(id)) all.add(other);
+      set({ multiMode: true, multiSelect: [...all], version: get().version + 1, statusMessage: `${all.size} piezas: toda la línea conectada.` });
+    },
+
+    deleteMulti: () => {
+      const { graph } = get();
+      const ids = get().multiSelect.filter((id) => graph.components.has(id));
+      if (!ids.length) return;
+      pushUndoSnapshot();
+      for (const id of ids) graph.removeComponent(id);
+      saveGraphToIndexedDb(graph.serialize());
+      const open = graph.getOpenPorts();
+      const next = open.length ? open[open.length - 1] : null;
+      set({
+        multiMode: false,
+        multiSelect: [],
+        selectedComponentId: next ? next.componentId : null,
+        selectedPortId: next ? next.id : null,
+        activeDirection: next ? next.direction.clone().normalize() : get().activeDirection,
+        collidingComponentIds: detectPipingCollisions(graph).collidingComponentIds,
+        version: get().version + 1,
+        statusMessage: `${ids.length} pieza${ids.length === 1 ? '' : 's'} borrada${ids.length === 1 ? '' : 's'}.`
+      });
+    },
+
+    moveMulti: (delta, copy) => {
+      const { graph } = get();
+      const ids = get().multiSelect.filter((id) => graph.components.has(id));
+      if (!ids.length || delta.lengthSq() < 1e-6) return;
+      pushUndoSnapshot();
+      let message: string;
+      let selection = ids;
+      if (copy) {
+        selection = graph.duplicateComponents(ids, delta);
+        message = `${ids.length} pieza${ids.length === 1 ? '' : 's'} copiada${ids.length === 1 ? '' : 's'} a ${Math.round(delta.length())} mm. La copia quedó seleccionada.`;
+      } else {
+        const detached = graph.translateComponents(ids, delta);
+        message = `${ids.length} pieza${ids.length === 1 ? '' : 's'} movida${ids.length === 1 ? '' : 's'} ${Math.round(delta.length())} mm.${
+          detached ? ` Se soltaron ${detached} unión${detached === 1 ? '' : 'es'} con el resto del modelo.` : ''
+        }`;
+      }
+      saveGraphToIndexedDb(graph.serialize());
+      const selectedPort = get().selectedPortId ? graph.ports.get(get().selectedPortId!) : null;
+      set({
+        multiSelect: selection,
+        selectedPortId: selectedPort && !selectedPort.connectedJointId ? selectedPort.id : null,
+        collidingComponentIds: detectPipingCollisions(graph).collidingComponentIds,
+        version: get().version + 1,
+        statusMessage: message
+      });
     },
 
     undo: () => {
@@ -1017,6 +1730,16 @@ export const usePipingStore = create<PipingState>((set, get) => {
 
     frameAll: () => {
       set({ triggerFrameAll: get().triggerFrameAll + 1 });
+    },
+
+    focusComponent: (compId) => {
+      const { graph, isolation } = get();
+      if (!graph.components.has(compId)) return;
+      const visible = isolatedIds(graph, isolation);
+      if (visible && !visible.has(compId)) set({ isolation: null });
+      if (get().sectionBox) set({ sectionBox: null });
+      get().setSelectedComponentId(compId);
+      set({ focusRequest: { id: compId, seq: (get().focusRequest?.seq ?? 0) + 1 } });
     },
 
     toggleBom: () => set((state) => ({ isBomOpen: !state.isBomOpen })),
@@ -1277,4 +2000,29 @@ export const usePipingStore = create<PipingState>((set, get) => {
       });
     }
   };
+});
+
+usePipingStore.subscribe((state, prev) => {
+  // Modelo nuevo: las ayudas de vista del anterior ya no valen
+  if (state.graph !== prev.graph && (state.isolation || state.sectionBox || state.measurePoints.length)) {
+    usePipingStore.setState({ isolation: null, sectionBox: null, measurePoints: [] });
+    return;
+  }
+  // Tramo aislado: sigue a las piezas que se agregan o se rehacen al trazar
+  if (state.version !== prev.version && state.isolation?.kind === 'run') {
+    const alive = state.isolation.ids.filter((id) => state.graph.components.has(id));
+    if (!alive.length) {
+      usePipingStore.setState({ isolation: null });
+    } else {
+      const ids = new Set<string>();
+      for (const id of alive) if (!ids.has(id)) for (const other of state.graph.connectedRun(id)) ids.add(other);
+      const same = ids.size === state.isolation.ids.length && state.isolation.ids.every((id) => ids.has(id));
+      if (!same) usePipingStore.setState({ isolation: { kind: 'run', ids: [...ids] } });
+    }
+  }
+  if (connectExecuting) return;
+  const pending = state.connectPicking || state.connectRoutes.length > 0;
+  if (pending && (state.selectedPortId !== prev.selectedPortId || state.version !== prev.version || state.graph !== prev.graph)) {
+    usePipingStore.setState({ connectPicking: false, connectTargetId: null, connectRoutes: [], connectIndex: 0 });
+  }
 });

@@ -1,5 +1,7 @@
 import React, { useRef, useState, useEffect } from 'react';
-import { PaletteId, useUiConfigStore } from '../store/useUiConfigStore';
+import { PALETTE_PANEL, PaletteId, useUiConfigStore } from '../store/useUiConfigStore';
+import { MobileSheet } from './MobileSheet';
+import { usePhoneLayout } from './useIsPhone';
 
 interface FloatingPaletteProps {
   paletteId: PaletteId;
@@ -15,6 +17,12 @@ interface FloatingPaletteProps {
   forceCollapsed?: boolean;
   /** Si es true, no permite cerrar la paleta con X o muestra solo colapsar */
   hideCloseButton?: boolean;
+  /** Clases del cuerpo cuando la paleta se muestra como panel del teléfono */
+  sheetBodyClassName?: string;
+  /** Escala del contenido en el panel del teléfono */
+  sheetZoom?: number;
+  /** Texto del panel del teléfono cuando el cuerpo está plegado (por ejemplo, sin pieza elegida) */
+  sheetEmptyHint?: string;
   children: React.ReactNode;
 }
 
@@ -29,8 +37,14 @@ export const FloatingPalette: React.FC<FloatingPaletteProps> = ({
   onToggleCollapseOverride,
   forceCollapsed,
   hideCloseButton = false,
+  sheetBodyClassName,
+  sheetZoom,
+  sheetEmptyHint,
   children
 }) => {
+  const phoneLayout = usePhoneLayout();
+  const mobilePanel = useUiConfigStore((s) => s.mobilePanel);
+  const setMobilePanel = useUiConfigStore((s) => s.setMobilePanel);
   const paletteState = useUiConfigStore((s) => s.palettes[paletteId]);
   const setPalettePosition = useUiConfigStore((s) => s.setPalettePosition);
   const togglePaletteOpen = useUiConfigStore((s) => s.togglePaletteOpen);
@@ -49,6 +63,26 @@ export const FloatingPalette: React.FC<FloatingPaletteProps> = ({
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, [paletteId, paletteState?.x, paletteState?.y, setPalettePosition]);
+
+  // Teléfono: la paleta es un panel fijo y se abre desde la barra de pestañas
+  if (phoneLayout) {
+    const panel = PALETTE_PANEL[paletteId];
+    if (!panel || mobilePanel !== panel) return null;
+    return (
+      <MobileSheet
+        layout={phoneLayout}
+        title={title}
+        icon={icon}
+        badge={badge}
+        headerActions={headerActions}
+        onClose={() => setMobilePanel(null)}
+        bodyClassName={forceCollapsed ? '' : sheetBodyClassName ?? bodyClassName}
+        zoom={forceCollapsed ? undefined : sheetZoom}
+      >
+        {forceCollapsed ? <p className="px-4 py-6 text-sm text-slate-400 text-center">{sheetEmptyHint}</p> : children}
+      </MobileSheet>
+    );
+  }
 
   if (!paletteState || !paletteState.isOpen) return null;
 

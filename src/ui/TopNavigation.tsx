@@ -4,6 +4,9 @@ import { useUiConfigStore } from '../store/useUiConfigStore';
 import { useProjectStore } from '../store/useProjectStore';
 import { PcfExporter } from '../core/exporters/PcfExporter';
 import { downloadFile } from '../utils/fileDownloader';
+import { Camera, Crosshair, Database, Download, FileText, FolderOpen, Layers, ListChecks, Maximize, Redo2, ShieldCheck, Trash2, Undo2, Upload } from 'lucide-react';
+import { MobileSheet } from './MobileSheet';
+import { usePhoneLayout, vibrate } from './useIsPhone';
 
 const BUILT_IN_SPECS = ['RCI1', 'CS150', 'CS300', 'SS150'];
 
@@ -40,6 +43,9 @@ export const TopNavigation: React.FC = () => {
   const togglePaletteOpen = useUiConfigStore((s) => s.togglePaletteOpen);
   const togglePaletteCollapsed = useUiConfigStore((s) => s.togglePaletteCollapsed);
   const resetWorkspaceLayout = useUiConfigStore((s) => s.resetWorkspaceLayout);
+  const mobilePanel = useUiConfigStore((s) => s.mobilePanel);
+  const setMobilePanel = useUiConfigStore((s) => s.setMobilePanel);
+  const phone = usePhoneLayout();
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pcfInputRef = useRef<HTMLInputElement>(null);
@@ -126,6 +132,138 @@ export const TopNavigation: React.FC = () => {
 
   const isPropsUnfolded =
     palettes.properties.isOpen && Boolean(selectedComponentId) && !palettes.properties.isCollapsed;
+
+  // Inputs ocultos para cargar archivos .pspc y .pcf
+  const hiddenInputs = (
+    <>
+      <input ref={fileInputRef} type="file" accept=".pspc,.pspx,.pcat,.xml" multiple onChange={handleFileUpload} className="hidden" />
+      <input ref={pcfInputRef} type="file" accept=".pcf,.txt,.achero" multiple onChange={handlePcfUpload} className="hidden" />
+    </>
+  );
+
+  // Teléfono: arriba solo lo que se usa trazando; el resto está en el panel "Más"
+  if (phone) {
+    const more: { label: string; hint: string; Icon: typeof Undo2; onClick: () => void; tone?: string; disabled?: boolean }[] = [
+      { label: 'Proyectos', hint: projectName, Icon: FolderOpen, onClick: toggleProjects },
+      { label: 'Campo', hint: noteCount ? `${noteCount} nota${noteCount > 1 ? 's' : ''}` : 'Cambios y fotos', Icon: Camera, onClick: toggleField, tone: 'text-orange-300' },
+      { label: 'Abrir PCF', hint: 'Desde Plant 3D', Icon: Upload, onClick: () => pcfInputRef.current?.click(), tone: 'text-amber-300' },
+      { label: 'Exportar PCF', hint: 'Para PCF to Pipe', Icon: Download, onClick: handleQuickExportPcf, tone: 'text-sky-300', disabled: graph.components.size === 0 },
+      { label: 'Spools', hint: 'Taller y campo', Icon: Layers, onClick: toggleSpools, tone: 'text-amber-300' },
+      { label: 'Cortes y BOM', hint: 'Lista de materiales', Icon: ListChecks, onClick: toggleBom, tone: 'text-emerald-300' },
+      { label: 'Planos', hint: 'Isométricos y DXF', Icon: FileText, onClick: toggleExport, tone: 'text-sky-300' },
+      { label: 'Cargar spec', hint: '.pspc y .pspx', Icon: Database, onClick: () => fileInputRef.current?.click() },
+      { label: 'Encuadrar', hint: 'Ver todo el modelo', Icon: Maximize, onClick: frameAll },
+      { label: 'Revisar', hint: 'Avisos del modelo', Icon: ShieldCheck, onClick: () => useUiConfigStore.getState().setIssuesOpen(true), tone: 'text-emerald-300' },
+      {
+        label: cameraMode === 'ROUTE_MODE' ? 'Seguir boca: sí' : 'Seguir boca: no',
+        hint: 'La cámara va a la boca activa',
+        Icon: Crosshair,
+        onClick: handleModeToggle,
+        tone: cameraMode === 'ROUTE_MODE' ? 'text-[#38bdf8]' : undefined
+      },
+      {
+        label: 'Reiniciar',
+        hint: 'Borra el modelo',
+        Icon: Trash2,
+        onClick: () => {
+          if (window.confirm('¿Borrar todo el modelo de este proyecto?')) void resetGraph();
+        },
+        tone: 'text-rose-400'
+      }
+    ];
+    const selectCls =
+      'h-11 max-w-[5.5rem] rounded-lg bg-[#161920] border border-[#343b48] px-1.5 text-xs font-mono font-bold outline-none';
+    const iconBtn = (enabled: boolean) =>
+      `w-11 h-11 rounded-lg border flex items-center justify-center shrink-0 ${
+        enabled ? 'bg-[#2b313d] border-[#3e4656] text-slate-100 active:bg-slate-700' : 'bg-[#161920] border-[#262b35] text-slate-600'
+      }`;
+    return (
+      <>
+        <header data-tour="top" className="absolute top-0 left-0 right-0 z-30 flex flex-col bg-[#1b1f26] border-b border-[#343b48] shadow-xl select-none">
+          {hiddenInputs}
+          <div className="h-12 px-1.5 flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={toggleProjects}
+              className="h-11 flex-1 min-w-0 flex flex-col items-start justify-center bg-[#161920] border border-[#0696d7]/60 rounded-lg px-2"
+            >
+              <span className="text-[9px] uppercase text-slate-400 font-bold leading-none mb-0.5">Proyecto ▾</span>
+              <span className="text-xs font-bold text-slate-100 leading-tight truncate max-w-full">{projectName}</span>
+            </button>
+            <select
+              value={specCode}
+              onChange={(e) => loadBuiltInSpec(e.target.value)}
+              className={`${selectCls} text-[#38bdf8]`}
+              aria-label="Spec"
+            >
+              {specOptions.map((sp) => (
+                <option key={sp} value={sp} className="bg-[#161920] text-slate-100">
+                  {sp}
+                </option>
+              ))}
+            </select>
+            <select
+              value={nominalDiameter}
+              onChange={(e) => setNominalDiameter(Number(e.target.value))}
+              className={`${selectCls} text-emerald-400`}
+              aria-label="Diámetro nominal"
+            >
+              {availableDiameters.map((d) => (
+                <option key={d} value={d} className="bg-[#161920] text-slate-100">
+                  {formatNd(d)}
+                </option>
+              ))}
+            </select>
+            <button type="button" onClick={undo} disabled={!canUndo} className={iconBtn(canUndo)} aria-label="Deshacer">
+              <Undo2 size={20} />
+            </button>
+            <button type="button" onClick={redo} disabled={!canRedo} className={iconBtn(canRedo)} aria-label="Rehacer">
+              <Redo2 size={20} />
+            </button>
+          </div>
+          <div className="h-[22px] px-2 bg-[#14171d] border-t border-[#282d38] flex items-center text-[11px] text-slate-300 font-mono">
+            <span className="text-[#0696d7] font-bold shrink-0 mr-1.5">&gt;_</span>
+            <span className="truncate">{statusMessage}</span>
+          </div>
+        </header>
+
+        {mobilePanel === 'mas' && (
+          <MobileSheet layout={phone} title="Más" onClose={() => setMobilePanel(null)} bodyClassName="p-3 space-y-3">
+            <label className="flex items-center gap-2 bg-[#111419] border border-[#343b48] rounded-lg px-3 h-11">
+              <span className="text-[10px] uppercase font-bold text-slate-400 shrink-0">Línea</span>
+              <input
+                type="text"
+                value={lineNumber}
+                onChange={(e) => setLineNumber(e.target.value)}
+                className="flex-1 min-w-0 bg-transparent text-sm font-mono font-bold text-amber-300 outline-none"
+                aria-label="Número de línea"
+              />
+            </label>
+            <div className="grid grid-cols-3 landscape:grid-cols-2 gap-2">
+              {more.map(({ label, hint, Icon, onClick, tone, disabled }) => (
+                <button
+                  key={label}
+                  type="button"
+                  disabled={disabled}
+                  onClick={() => {
+                    vibrate();
+                    onClick();
+                    // Lo que abre otra pantalla deja el modelo libre al volver
+                    if (Icon !== Crosshair && Icon !== ShieldCheck) setMobilePanel(null);
+                  }}
+                  className="min-h-[68px] rounded-xl bg-[#212631] border border-[#343c4c] px-1.5 py-2 flex flex-col items-center justify-center gap-1 active:bg-[#2b3240] disabled:opacity-40"
+                >
+                  <Icon size={22} className={tone ?? 'text-slate-200'} />
+                  <span className="text-xs font-bold text-slate-100 leading-none text-center">{label}</span>
+                  <span className="text-[10px] text-slate-400 leading-none truncate max-w-full">{hint}</span>
+                </button>
+              ))}
+            </div>
+          </MobileSheet>
+        )}
+      </>
+    );
+  }
 
   return (
     <header className="absolute top-0 left-0 right-0 z-30 flex flex-col bg-[#1b1f26]/98 backdrop-blur-md border-b border-[#343b48] shadow-xl select-none">
@@ -235,23 +373,7 @@ export const TopNavigation: React.FC = () => {
 
       {/* Ribbon Principal de Herramientas (Line Number + Spec + Size + Import/Export) */}
       <div className="h-12 px-2.5 flex items-center justify-between gap-1.5 overflow-x-auto no-scrollbar bg-[#222731]">
-        {/* Inputs ocultos para cargar archivos .pspc y .pcf */}
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept=".pspc,.pspx,.pcat,.xml"
-          multiple
-          onChange={handleFileUpload}
-          className="hidden"
-        />
-        <input
-          ref={pcfInputRef}
-          type="file"
-          accept=".pcf,.txt,.achero"
-          multiple
-          onChange={handlePcfUpload}
-          className="hidden"
-        />
+        {hiddenInputs}
 
         {/* Grupo Ribbon: Proyecto + Line Number + Spec Selector + Size Selector */}
         <div className="flex items-center space-x-1.5 shrink-0">

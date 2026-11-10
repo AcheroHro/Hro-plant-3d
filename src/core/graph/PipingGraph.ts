@@ -13,7 +13,9 @@ import {
   ElbowPlacementResult,
   PcfGraphInfo,
   FieldWeldKind,
-  NippleEndFinish
+  NippleEndFinish,
+  SupportKind,
+  SupportMark
 } from '../../types/piping';
 import { calculateElbowPlacement, validateOpposedPorts, EPSILON } from '../math/elbowSolver';
 import { ConnectionRule, DEFAULT_CONNECTION_RULES, resolveConnection } from '../specs/connectionRules';
@@ -51,6 +53,8 @@ export class PipingGraph {
   public connectionRules: ConnectionRule[] = DEFAULT_CONNECTION_RULES;
   /** Cabecera y unidades del PCF importado (para reexportarlo igual) */
   public pcfInfo?: PcfGraphInfo;
+  /** Soportes marcados sobre los caños (no son piezas del grafo: no tienen bocas) */
+  public supports: Map<string, SupportMark> = new Map();
 
   private undoStack: GraphCommand[] = [];
   private redoStack: GraphCommand[] = [];
@@ -579,6 +583,14 @@ export class PipingGraph {
                 queue.push(otherPort.connectedJointId);
               }
             }
+            // Los olets e injertos apoyados en un caño viajan con él, y con ellos su ramal
+            for (const olet of this.oletsOn(comp)) {
+              if (olet.id === blockedComponentId || componentIds.has(olet.id)) continue;
+              componentIds.add(olet.id);
+              for (const op of olet.ports) {
+                if (op.connectedJointId && !jointIds.has(op.connectedJointId)) queue.push(op.connectedJointId);
+              }
+            }
           }
         }
       }
@@ -593,6 +605,7 @@ export class PipingGraph {
   public translateDownstream(startPortId: string, blockedComponentId: string, delta: THREE.Vector3): void {
     if (delta.lengthSq() < 1e-8) return;
     const { componentIds, jointIds } = this.getDownstreamSubgraph(startPortId, blockedComponentId);
+    for (const s of this.supportsOnComponents(componentIds)) s.position.add(delta);
 
     for (const compId of componentIds) {
       const comp = this.components.get(compId);
@@ -641,6 +654,7 @@ export class PipingGraph {
     const rotatePoint = (pt: THREE.Vector3) => {
       pt.sub(pivot).applyAxisAngle(normAxis, angleRad).add(pivot);
     };
+    for (const s of this.supportsOnComponents(componentIds)) rotatePoint(s.position);
 
     for (const compId of componentIds) {
       const comp = this.components.get(compId);
@@ -733,27 +747,401 @@ export class PipingGraph {
    * Modifica la longitud de un tramo de caño existente (PIPE) y propaga el desplazamiento
    * a todos los accesorios y cañerías conectados aguas abajo (como AutoCAD Plant 3D).
    */
-  public updatePipeLength(componentId: string, newLengthMm: number): Component | null {
+  public updatePipeLength(componentId: string, newLengthMm: number, anchor: 'start' | 'end' = 'start'): Component | null {
     const comp = this.components.get(componentId);
     if (!comp || comp.type !== 'PIPE' || newLengthMm <= 10 || comp.ports.length < 2) return null;
 
-    const port1 = comp.ports[0];
-    const port2 = comp.ports[1];
+    // El extremo de anclaje queda quieto; el otro se mueve y arrastra lo que tenga conectado
+    const fixed = anchor === 'start' ? comp.ports[0] : comp.ports[1];
+    const moving = anchor === 'start' ? comp.ports[1] : comp.ports[0];
 
-    const dir = port2.direction.clone().normalize();
-    const oldEnd = port2.position.clone();
-    const newEnd = port1.position.clone().add(dir.multiplyScalar(newLengthMm));
+    const dir = moving.direction.clone().normalize();
+    const oldEnd = moving.position.clone();
+    const newEnd = fixed.position.clone().add(dir.multiplyScalar(newLengthMm));
     const delta = new THREE.Vector3().subVectors(newEnd, oldEnd);
 
-    if (port2.connectedJointId) {
-      this.translateDownstream(port2.id, comp.id, delta);
+    if (moving.connectedJointId) {
+      this.translateDownstream(moving.id, comp.id, delta);
     }
 
-    port2.position.copy(newEnd);
-    comp.centerline[1].copy(newEnd);
+    moving.position.copy(newEnd);
+    comp.centerline[anchor === 'start' ? 1 : 0].copy(newEnd);
     comp.parameters.cutLength = newLengthMm;
     comp.parameters.grossLength = newLengthMm;
     return comp;
+  }
+
+  /**
+   * ¿Mover lo conectado a `movingPort` arrastraría también lo que está del otro lado de la pieza?
+   * Pasa cuando la línea cierra un circuito: ahí no se puede estirar ni cambiar una pieza sin romperlo.
+   */
+  public closesLoopThrough(componentId: string, movingPortId: string): boolean {
+    const comp = this.components.get(componentId);
+    if (!comp) return false;
+    const { componentIds } = this.getDownstreamSubgraph(movingPortId, componentId);
+    for (const port of comp.ports) {
+      if (port.id === movingPortId || !port.connectedJointId) continue;
+      const joint = this.joints.get(port.connectedJointId);
+      const otherId = joint ? (joint.portAId === port.id ? joint.portBId : joint.portAId) : null;
+      const other = otherId ? this.ports.get(otherId) : null;
+      if (other && componentIds.has(other.componentId)) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Sustituye un codo en su lugar por otro de la spec (otro ángulo u otra familia). La entrada
+   * (puerto 1) queda fija; lo conectado a la salida gira y se corre para seguir unido.
+   */
+  public swapElbow(componentId: string, elbowSpec: SpecFitting, angleDeg: number): Component | null {
+    const comp = this.components.get(componentId);
+    if (!comp || comp.type !== 'ELBOW' || comp.ports.length < 2) return null;
+    const [portIn, portOut] = comp.ports;
+    const uIn = portIn.direction.clone().negate().normalize();
+    const uOutOld = portOut.direction.clone().normalize();
+    const k = uIn.dot(uOutOld);
+    const axis = new THREE.Vector3().crossVectors(uIn, uOutOld);
+    if (axis.lengthSq() < 1e-8 || 1 - k * k < 1e-8) return null;
+    axis.normalize();
+
+    // Vértice actual: donde se cruzan los ejes de entrada y de salida
+    const chord = portOut.position.clone().sub(portIn.position);
+    const s0 = (chord.dot(uIn) - k * chord.dot(uOutOld)) / (1 - k * k);
+    const u0 = (chord.dot(uOutOld) - k * chord.dot(uIn)) / (1 - k * k);
+    const oldVertex = portIn.position.clone().addScaledVector(uIn, s0);
+
+    const newRad = THREE.MathUtils.degToRad(angleDeg);
+    const takeOff = elbowSpec.takeOff || (elbowSpec.radius ? elbowSpec.radius * Math.tan(newRad / 2) : 0);
+    if (!takeOff) return null;
+    const deltaRad = newRad - Math.acos(THREE.MathUtils.clamp(k, -1, 1));
+    const uOutNew = uOutOld.clone().applyAxisAngle(axis, deltaRad).normalize();
+    const newVertex = portIn.position.clone().addScaledVector(uIn, takeOff);
+    const newOut = newVertex.clone().addScaledVector(uOutNew, elbowSpec.takeOff2 || takeOff);
+
+    if (portOut.connectedJointId) {
+      this.rotateDownstream(portOut.id, comp.id, oldVertex, axis, deltaRad);
+      this.translateDownstream(portOut.id, comp.id, newOut.clone().sub(oldVertex.clone().addScaledVector(uOutNew, u0)));
+    }
+
+    const placement = calculateElbowPlacement(
+      portIn.position.clone().addScaledVector(uIn, -100),
+      newVertex,
+      newVertex.clone().addScaledVector(uOutNew, takeOff + 100),
+      takeOff,
+      elbowSpec.radius
+    );
+    const refresh = (port: Port, position: THREE.Vector3, direction: THREE.Vector3, specIndex: number) =>
+      Object.assign(port, this.portFromSpec(comp.id, port.index, position, direction, elbowSpec, specIndex), {
+        id: port.id,
+        connectedJointId: port.connectedJointId
+      });
+    refresh(portIn, portIn.position, portIn.direction, 0);
+    refresh(portOut, newOut, uOutNew, 1);
+
+    comp.specCode = elbowSpec.specCode;
+    comp.catalogId = String(elbowSpec.pnpid);
+    comp.centerline = placement.centerline.map((pt) => pt.clone());
+    Object.assign(comp.parameters, {
+      nominalDiameter: elbowSpec.nominalDiameter,
+      outerDiameter: elbowSpec.outerDiameter,
+      wallThickness: elbowSpec.wallThickness,
+      schedule: elbowSpec.schedule,
+      angle: placement.bendAngleDeg,
+      radius: elbowSpec.radius || elbowSpec.takeOff,
+      takeOff: elbowSpec.takeOff,
+      description: elbowSpec.shortDescription,
+      matrixElements: Array.from(placement.matrix.elements),
+      ...this.specParameters(elbowSpec)
+    });
+    // El bloque del PCF de origen describía la pieza anterior
+    delete comp.parameters.pcf;
+    return comp;
+  }
+
+  /**
+   * Sustituye una válvula en su lugar por otra de la spec con los mismos extremos. La entrada queda
+   * fija; si cambia el largo entre caras, lo conectado a la salida se corre.
+   */
+  public swapValve(componentId: string, valveSpec: SpecFitting): Component | null {
+    const comp = this.components.get(componentId);
+    if (!comp || comp.type !== 'VALVE' || comp.ports.length < 2) return null;
+    const [portIn, portOut] = comp.ports;
+    const dir = portOut.direction.clone().normalize();
+    const span = valveSpec.faceToFace || comp.parameters.faceToFace || portIn.position.distanceTo(portOut.position);
+    const newOut = portIn.position.clone().addScaledVector(dir, span);
+    if (portOut.connectedJointId) this.translateDownstream(portOut.id, comp.id, newOut.clone().sub(portOut.position));
+    portOut.position.copy(newOut);
+    comp.centerline = [portIn.position.clone(), newOut.clone()];
+    comp.specCode = valveSpec.specCode;
+    comp.catalogId = String(valveSpec.pnpid);
+    Object.assign(comp.parameters, {
+      faceToFace: span,
+      boltCircle: valveSpec.boltCircle || comp.parameters.boltCircle,
+      description: valveSpec.shortDescription,
+      ...this.specParameters(valveSpec)
+    });
+    delete comp.parameters.pcf;
+    return comp;
+  }
+
+  /** Todas las piezas unidas, directa o indirectamente, a una pieza (la línea entera) */
+  public connectedRun(componentId: string): string[] {
+    const seen = new Set<string>([componentId]);
+    const queue = [componentId];
+    while (queue.length) {
+      const comp = this.components.get(queue.shift()!);
+      for (const port of comp?.ports ?? []) {
+        const joint = port.connectedJointId ? this.joints.get(port.connectedJointId) : null;
+        if (!joint) continue;
+        const other = this.ports.get(joint.portAId === port.id ? joint.portBId : joint.portAId);
+        if (other && !seen.has(other.componentId)) {
+          seen.add(other.componentId);
+          queue.push(other.componentId);
+        }
+      }
+      // Olets e injertos: unen el ramal con el caño donde apoyan
+      const linked = !comp ? [] : comp.type === 'OLET' ? [this.oletHost(comp)] : this.oletsOn(comp);
+      for (const other of linked) {
+        if (other && !seen.has(other.id)) {
+          seen.add(other.id);
+          queue.push(other.id);
+        }
+      }
+    }
+    return [...seen];
+  }
+
+  /** Distancia de un punto al eje de un caño (segmento entre sus dos bocas) */
+  private distanceToPipeAxis(point: THREE.Vector3, pipe: Component): number {
+    const a = pipe.ports[0].position;
+    const ab = pipe.ports[1].position.clone().sub(a);
+    const len2 = ab.lengthSq();
+    const t = len2 < 1e-9 ? 0 : THREE.MathUtils.clamp(point.clone().sub(a).dot(ab) / len2, 0, 1);
+    return a.clone().addScaledVector(ab, t).distanceTo(point);
+  }
+
+  private isOnPipe(point: THREE.Vector3, pipe: Component): boolean {
+    if (pipe.type !== 'PIPE' || pipe.ports.length < 2) return false;
+    return this.distanceToPipeAxis(point, pipe) <= pipe.parameters.outerDiameter / 2 + 2;
+  }
+
+  /** Olets e injertos apoyados sobre un caño */
+  public oletsOn(pipe: Component): Component[] {
+    if (pipe.type !== 'PIPE' || pipe.ports.length < 2) return [];
+    const out: Component[] = [];
+    for (const c of this.components.values()) {
+      if (c.type === 'OLET' && c.centerline[0] && this.isOnPipe(c.centerline[0], pipe)) out.push(c);
+    }
+    return out;
+  }
+
+  /** Caño sobre el que apoya un olet o injerto */
+  public oletHost(olet: Component): Component | null {
+    const c = olet.centerline[0];
+    if (!c) return null;
+    for (const comp of this.components.values()) if (this.isOnPipe(c, comp)) return comp;
+    return null;
+  }
+
+  /**
+   * Derivación sobre un caño sin cortarlo: olet de la spec o, si no se pasa pieza, injerto directo
+   * (stub-in). `branch` describe el caño del ramal. Devuelve la pieza con su boca libre.
+   */
+  public addBranchOnPipe(
+    pipeId: string,
+    offsetMm: number,
+    branchDir: THREE.Vector3,
+    branch: SpecFitting,
+    oletSpec?: SpecFitting | null
+  ): Component {
+    const pipe = this.components.get(pipeId);
+    if (!pipe || pipe.type !== 'PIPE' || pipe.ports.length < 2) throw new Error('La derivación se hace sobre un caño.');
+    const a = pipe.ports[0].position;
+    const axis = pipe.ports[1].position.clone().sub(a);
+    const length = axis.length();
+    axis.normalize();
+    const dir = branchDir.clone().addScaledVector(axis, -branchDir.dot(axis));
+    if (dir.lengthSq() < 1e-6) throw new Error('El ramal tiene que salir hacia un costado del caño, no a lo largo.');
+    dir.normalize();
+    const headerOd = pipe.parameters.outerDiameter;
+    if (branch.outerDiameter > headerOd + 0.1) throw new Error('El ramal no puede ser más grande que el caño donde apoya.');
+    const margin = branch.outerDiameter / 2 + 10;
+    if (length < 2 * margin) throw new Error('El caño es demasiado corto para esa derivación.');
+    const centre = a.clone().addScaledVector(axis, THREE.MathUtils.clamp(offsetMm, margin, length - margin));
+
+    const compId = this.generateId('olet');
+    // Olet: sobresale del lomo del caño; injerto: el ramal nace en el lomo
+    const height = oletSpec ? oletSpec.faceToFace || Math.max(25, branch.outerDiameter * 0.75) : 0;
+    const takeOff = headerOd / 2 + height;
+    const portPos = centre.clone().addScaledVector(dir, takeOff);
+    const port: Port = oletSpec
+      ? this.portFromSpec(compId, 1, portPos, dir, oletSpec, 1)
+      : { ...this.portFromSpec(compId, 1, portPos, dir, branch, 0), endType: 'BW', plantEndType: 'BV' };
+    port.nominalDiameter = branch.nominalDiameter;
+    port.outerDiameter = branch.outerDiameter;
+
+    const component: Component = {
+      id: compId,
+      type: 'OLET',
+      specCode: (oletSpec ?? branch).specCode,
+      catalogId: oletSpec ? String(oletSpec.pnpid) : 'STUB-IN',
+      ports: [port],
+      centerline: [centre.clone(), portPos.clone()],
+      parameters: {
+        nominalDiameter: pipe.parameters.nominalDiameter,
+        outerDiameter: headerOd,
+        wallThickness: branch.wallThickness,
+        schedule: branch.schedule,
+        reducedNominalDiameter: branch.nominalDiameter,
+        reducedOuterDiameter: branch.outerDiameter,
+        takeOff,
+        ...(oletSpec ? this.specParameters(oletSpec) : {}),
+        description: oletSpec
+          ? oletSpec.shortDescription
+          : `INJERTO (STUB-IN) ${pipe.parameters.nominalDiameter}" x ${branch.nominalDiameter}"`,
+        stubIn: oletSpec ? undefined : true,
+        lineNumber: pipe.parameters.lineNumber
+      }
+    };
+    this.addComponent(component);
+    return component;
+  }
+
+  /** Marca un soporte sobre un caño, a `offsetMm` de su inicio */
+  public addSupport(pipeId: string, offsetMm: number, kind: SupportKind): SupportMark {
+    const pipe = this.components.get(pipeId);
+    if (!pipe || pipe.type !== 'PIPE' || pipe.ports.length < 2) throw new Error('El soporte se marca sobre un caño.');
+    const a = pipe.ports[0].position;
+    const axis = pipe.ports[1].position.clone().sub(a);
+    const length = axis.length();
+    const position = a.clone().addScaledVector(axis.normalize(), THREE.MathUtils.clamp(offsetMm, 0, length));
+    const mark: SupportMark = { id: this.generateId('sup'), kind, position, nominalDiameter: pipe.parameters.nominalDiameter };
+    this.supports.set(mark.id, mark);
+    return mark;
+  }
+
+  public removeSupport(id: string): boolean {
+    return this.supports.delete(id);
+  }
+
+  /** Caño que sostiene un soporte (por posición) */
+  public supportHost(mark: SupportMark): Component | null {
+    for (const comp of this.components.values()) if (this.isOnPipe(mark.position, comp)) return comp;
+    return null;
+  }
+
+  /** Soportes que siguen apoyados en un caño; los que quedaron en el aire se descartan */
+  public liveSupports(): SupportMark[] {
+    for (const [id, mark] of this.supports) if (!this.supportHost(mark)) this.supports.delete(id);
+    return [...this.supports.values()];
+  }
+
+  /** Soporte más cercano a un punto de un caño, dentro de `maxMm` */
+  public supportNear(pipeId: string, point: THREE.Vector3, maxMm = 150): SupportMark | null {
+    const pipe = this.components.get(pipeId);
+    if (!pipe) return null;
+    let best: SupportMark | null = null;
+    for (const mark of this.supports.values()) {
+      if (!this.isOnPipe(mark.position, pipe)) continue;
+      const d = mark.position.distanceTo(point);
+      if (d <= maxMm && (!best || d < best.position.distanceTo(point))) best = mark;
+    }
+    return best;
+  }
+
+  private supportsOnComponents(ids: Iterable<string>): SupportMark[] {
+    const pipes = [...ids].map((id) => this.components.get(id)).filter((c): c is Component => !!c && c.type === 'PIPE');
+    if (!pipes.length || !this.supports.size) return [];
+    return [...this.supports.values()].filter((s) => pipes.some((p) => this.isOnPipe(s.position, p)));
+  }
+
+  private shiftComponent(comp: Component, delta: THREE.Vector3): void {
+    for (const port of comp.ports) port.position.add(delta);
+    for (const pt of comp.centerline) pt.add(delta);
+    const m = comp.parameters.matrixElements;
+    if (m && m.length === 16) {
+      const next = [...m];
+      next[12] += delta.x;
+      next[13] += delta.y;
+      next[14] += delta.z;
+      comp.parameters.matrixElements = next;
+    }
+  }
+
+  /**
+   * Mueve un grupo de piezas. Las uniones entre ellas se conservan; las que las ataban al resto
+   * del modelo se sueltan (quedan bocas libres), como al mover piezas en Plant 3D.
+   * Devuelve cuántas uniones se soltaron.
+   */
+  public translateComponents(componentIds: string[], delta: THREE.Vector3): number {
+    const ids = new Set(componentIds);
+    let detached = 0;
+    const moved = new Set<string>();
+    for (const s of this.supportsOnComponents(ids)) s.position.add(delta);
+    for (const id of ids) {
+      const comp = this.components.get(id);
+      if (!comp) continue;
+      for (const port of comp.ports) {
+        const joint = port.connectedJointId ? this.joints.get(port.connectedJointId) : null;
+        if (!joint) continue;
+        const other = this.ports.get(joint.portAId === port.id ? joint.portBId : joint.portAId);
+        if (other && ids.has(other.componentId)) {
+          if (!moved.has(joint.id)) {
+            joint.position.add(delta);
+            moved.add(joint.id);
+          }
+        } else {
+          this.removeJoint(joint.id);
+          detached++;
+        }
+      }
+      this.shiftComponent(comp, delta);
+    }
+    return detached;
+  }
+
+  /** Copia un grupo de piezas corrido en `delta`, con las uniones que tenían entre ellas */
+  public duplicateComponents(componentIds: string[], delta: THREE.Vector3): string[] {
+    const ids = new Set(componentIds);
+    const portMap = new Map<string, string>();
+    const created: string[] = [];
+    for (const id of ids) {
+      const src = this.components.get(id);
+      if (!src) continue;
+      const compId = this.generateId(src.type.toLowerCase());
+      const copy: Component = {
+        ...src,
+        id: compId,
+        ports: src.ports.map((port) => {
+          const portId = this.generateId('prt');
+          portMap.set(port.id, portId);
+          return {
+            ...port,
+            id: portId,
+            componentId: compId,
+            position: port.position.clone(),
+            direction: port.direction.clone(),
+            connectedJointId: undefined
+          };
+        }),
+        centerline: src.centerline.map((pt) => pt.clone()),
+        // La copia es una pieza nueva: no hereda el tag ni el bloque PCF de la original
+        parameters: { ...src.parameters, nippleTag: undefined, pcf: undefined }
+      };
+      this.shiftComponent(copy, delta);
+      this.addComponent(copy);
+      created.push(compId);
+    }
+    for (const joint of [...this.joints.values()]) {
+      const a = portMap.get(joint.portAId);
+      const b = portMap.get(joint.portBId);
+      if (!a || !b) continue;
+      const jointId = this.generateId('jnt');
+      this.joints.set(jointId, { ...joint, id: jointId, portAId: a, portBId: b, position: joint.position.clone().add(delta) });
+      this.ports.get(a)!.connectedJointId = jointId;
+      this.ports.get(b)!.connectedJointId = jointId;
+    }
+    return created;
   }
 
   /**
@@ -909,7 +1297,7 @@ export class PipingGraph {
    * Inserta una reducción en un puerto abierto. El extremo chico toma diámetro y OD del
    * puerto S2 de la spec; las excéntricas corren el eje chico (por defecto, plano abajo).
    */
-  public addReducer(port: Port, reducerSpec: SpecFitting): Component {
+  public addReducer(port: Port, reducerSpec: SpecFitting, reversed = false): Component {
     const compId = this.generateId('red');
     const L = reducerSpec?.faceToFace || 88.9;
     const dir = port.direction.clone().normalize();
@@ -926,13 +1314,18 @@ export class PipingGraph {
       // Plano abajo: el eje chico baja (dirección -Z); en tramos verticales se usa -X
       const down = Math.abs(dir.z) > 0.9 ? new THREE.Vector3(-1, 0, 0) : new THREE.Vector3(0, 0, -1);
       down.addScaledVector(dir, -down.dot(dir)).normalize();
-      p2.addScaledVector(down, offset);
+      p2.addScaledVector(down, reversed ? -offset : offset);
     }
 
-    const port1 = this.portFromSpec(compId, 1, p1, dir.clone().negate(), reducerSpec, 0);
-    const port2 = this.portFromSpec(compId, 2, p2, dir, reducerSpec, 1);
-    port2.nominalDiameter = targetND;
-    port2.outerDiameter = targetOD;
+    // `reversed`: ampliación, se entra por el extremo chico y se sale por el grande
+    const port1 = this.portFromSpec(compId, 1, p1, dir.clone().negate(), reducerSpec, reversed ? 1 : 0);
+    const port2 = this.portFromSpec(compId, 2, p2, dir, reducerSpec, reversed ? 0 : 1);
+    const small = reversed ? port1 : port2;
+    small.nominalDiameter = targetND;
+    small.outerDiameter = targetOD;
+    const big = reversed ? port2 : port1;
+    big.nominalDiameter = nd1;
+    big.outerDiameter = od1;
 
     const component: Component = {
       id: compId,
@@ -1279,7 +1672,14 @@ export class PipingGraph {
       components: serializedComponents,
       joints: serializedJoints,
       activeLineNumber: this.activeLineNumber,
-      pcf: this.pcfInfo
+      pcf: this.pcfInfo,
+      supports: [...this.supports.values()].map((s) => ({
+        id: s.id,
+        kind: s.kind,
+        position: [s.position.x, s.position.y, s.position.z],
+        nominalDiameter: s.nominalDiameter,
+        tag: s.tag
+      }))
     };
   }
 
@@ -1296,6 +1696,10 @@ export class PipingGraph {
     this.currentSchedule = state.currentSchedule;
     if (state.activeLineNumber) this.activeLineNumber = state.activeLineNumber;
     this.pcfInfo = state.pcf;
+    this.supports.clear();
+    for (const s of state.supports ?? []) {
+      this.supports.set(s.id, { id: s.id, kind: s.kind, position: new THREE.Vector3(...s.position), nominalDiameter: s.nominalDiameter, tag: s.tag });
+    }
 
     for (const sComp of Object.values(state.components)) {
       const comp: Component = {

@@ -2,6 +2,17 @@ import { create } from 'zustand';
 
 export type PaletteId = 'tools' | 'properties' | 'compass' | 'numpad' | 'openPorts';
 
+/** Panel abierto en la disposición de teléfono (uno a la vez) */
+export type MobilePanel = 'trazar' | 'piezas' | 'propiedades' | 'vistas' | 'mas';
+
+export const PALETTE_PANEL: Record<PaletteId, MobilePanel | null> = {
+  numpad: 'trazar',
+  tools: 'piezas',
+  properties: 'propiedades',
+  compass: 'vistas',
+  openPorts: null
+};
+
 export type ToolsLayoutMode = '1col' | '2col' | 'horiz';
 
 export type PropertyPreset = 'COMPACT' | 'WORKSHOP' | 'ENGINEERING';
@@ -63,6 +74,16 @@ export const PROPERTY_FIELD_LABELS: Record<
 };
 
 const STORAGE_KEY = 'achero_p3d_ui_config_v1';
+const TOUR_DONE_KEY = 'achero_p3d_tour_done_v1';
+
+/** El recorrido guiado ya se vio (o se salteó) en este dispositivo */
+export const tourAlreadySeen = (): boolean => {
+  try {
+    return typeof window === 'undefined' || window.localStorage.getItem(TOUR_DONE_KEY) === '1';
+  } catch {
+    return true;
+  }
+};
 
 const getDefaultPalettes = (): Record<PaletteId, PaletteWindowState> => {
   const w = typeof window !== 'undefined' ? window.innerWidth : 1024;
@@ -134,6 +155,22 @@ interface UiConfigState {
   propertyFields: PropertyFieldsConfig;
   isPropertiesConfigOpen: boolean;
   topZIndex: number;
+  mobilePanel: MobilePanel | null;
+  /** Hoja de ayuda con los gestos */
+  helpOpen: boolean;
+  /** Lista de avisos de la revisión del modelo */
+  issuesOpen: boolean;
+  /** Paso del recorrido guiado, o null si no está en curso */
+  tourStep: number | null;
+
+  setHelpOpen: (open: boolean) => void;
+  setIssuesOpen: (open: boolean) => void;
+  setTourStep: (step: number | null) => void;
+  /** Termina el recorrido y recuerda que ya se vio */
+  finishTour: () => void;
+
+  /** Abre un panel del teléfono; si ya estaba abierto lo cierra */
+  setMobilePanel: (panel: MobilePanel | null, toggle?: boolean) => void;
 
   // Acciones de ventana/paleta
   setPalettePosition: (id: PaletteId, x: number, y: number) => void;
@@ -212,6 +249,28 @@ export const useUiConfigStore = create<UiConfigState>((set, get) => {
     propertyFields: initialFields,
     isPropertiesConfigOpen: false,
     topZIndex: 30,
+    mobilePanel: 'trazar',
+    helpOpen: false,
+    issuesOpen: false,
+    tourStep: null,
+
+    setMobilePanel: (panel, toggle = true) => {
+      const next = toggle && get().mobilePanel === panel ? null : panel;
+      // La lista de avisos ocupa el mismo lugar que los paneles: se muestra uno solo
+      set(next ? { mobilePanel: next, issuesOpen: false } : { mobilePanel: next });
+    },
+
+    setHelpOpen: (open) => set({ helpOpen: open }),
+    setIssuesOpen: (open) => set(open ? { issuesOpen: true, mobilePanel: null, helpOpen: false } : { issuesOpen: false }),
+    setTourStep: (step) => set(step === null ? { tourStep: null } : { tourStep: step, helpOpen: false, issuesOpen: false }),
+    finishTour: () => {
+      try {
+        window.localStorage.setItem(TOUR_DONE_KEY, '1');
+      } catch {
+        // Sin almacenamiento: el recorrido se ofrecerá de nuevo
+      }
+      set({ tourStep: null });
+    },
 
     setPalettePosition: (id, x, y) => {
       const w = typeof window !== 'undefined' ? window.innerWidth : 1200;

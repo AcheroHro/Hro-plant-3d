@@ -14,6 +14,13 @@ import { PropertiesInspector } from './ui/PropertiesInspector';
 import { ProjectsModal } from './ui/ProjectsModal';
 import { FieldModal } from './ui/FieldModal';
 import { PwaBanner } from './ui/PwaBanner';
+import { MobileBar } from './ui/MobileBar';
+import { PieceMenu } from './ui/PieceMenu';
+import { MultiSelectBar } from './ui/MultiSelectBar';
+import { ModelCheck } from './ui/ModelCheck';
+import { HelpSheet } from './ui/HelpSheet';
+import { GuidedTour } from './ui/GuidedTour';
+import { getPhoneLayout } from './ui/useIsPhone';
 import { useProjectStore } from './store/useProjectStore';
 import { listenIncomingFiles } from './pwa/pwa';
 
@@ -21,6 +28,11 @@ export default function App() {
   const initialize = usePipingStore((s) => s.initialize);
   const isExportOpen = usePipingStore((s) => s.isExportOpen);
   const toggleExport = usePipingStore((s) => s.toggleExport);
+
+  useEffect(() => {
+    // En el teléfono la cámara sigue a la boca activa: después de cada tramo queda a la vista
+    if (getPhoneLayout()) usePipingStore.getState().setCameraMode('ROUTE_MODE');
+  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -62,6 +74,18 @@ export default function App() {
 
       {/* Paleta Flotante de Línea de Comandos + Dynamic Input estilo AutoCAD */}
       <TouchNumpad />
+
+      {/* Teléfono: barra de pestañas que abre un panel a la vez */}
+      <MobileBar />
+
+      {/* Edición con gestos: menú de la pieza apretada y barra de selección múltiple */}
+      <PieceMenu />
+      <MultiSelectBar />
+
+      {/* Revisión del modelo, ayuda con los gestos y recorrido guiado */}
+      <ModelCheck />
+      <HelpSheet />
+      <GuidedTour />
 
       {/* Modal de Catálogo Completo de Accesorios de Cañería */}
       <ToolPaletteModal />
