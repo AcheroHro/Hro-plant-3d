@@ -5,6 +5,7 @@ import { resizeRun } from '../core/graph/resizeRun';
 import { SpecDatabaseReader } from '../core/specs/SpecDatabaseReader';
 import { PartCategory } from '../core/specs/catalogTypes';
 import { valveKindFrom } from '../core/specs/valveKind';
+import { aPiece, pieceName, pieceNameLower } from '../core/pieceNames';
 import {
   LoadedSpec,
   loadBundledSpec,
@@ -261,7 +262,7 @@ export const usePipingStore = create<PipingState>((set, get) => {
     const choice = elbowForBend(bendDeg, has45);
     if (!choice) return { error: `Giro de ${bendDeg.toFixed(0)}°: un codo no gira más de 90°. Hacelo en dos tramos.` };
     const spec = specReader.findElbow(nd, choice.baseAngle, specCode, findOpts(port));
-    if (!spec) return { error: `No se encontró codo de ${choice.baseAngle}° para ND ${nd}" en catálogo.` };
+    if (!spec) return { error: `La spec no tiene codo de ${choice.baseAngle}° en ${formatSize(nd)}.` };
     const rad = THREE.MathUtils.degToRad(bendDeg);
     const catalogTakeOff = spec.takeOff || (spec.radius ? spec.radius * Math.tan(rad / 2) : 76.2);
     if (!choice.trimmed) return { spec, takeOff: catalogTakeOff };
@@ -322,6 +323,13 @@ export const usePipingStore = create<PipingState>((set, get) => {
   });
 
   const formatSize = (nd: number) => get().specReader?.catalog.sizeLabel(nd) ?? `${nd}"`;
+
+  /** Dirección dicha en palabras: "hacia +X" o "en diagonal" */
+  const dirName = (d: THREE.Vector3) => {
+    const n = d.clone().normalize();
+    const i = [0, 1, 2].find((k) => Math.abs(n.getComponent(k)) > 0.99);
+    return i === undefined ? 'en diagonal' : `hacia ${n.getComponent(i) > 0 ? '+' : '−'}${'XYZ'[i]}`;
+  };
 
   /**
    * Reducciones de la spec para pasar de un diámetro a otro: la directa o, si no existe, dos
@@ -414,7 +422,7 @@ export const usePipingStore = create<PipingState>((set, get) => {
     selectedComponentId: null,
     snappedPortId: null,
     collidingComponentIds: new Set<string>(),
-    statusMessage: 'Sistema de cañerías listo. Trazado de eje a eje activo.',
+    statusMessage: 'Listo para trazar.',
     isBomOpen: false,
     spoolView: false,
     isSpoolsOpen: false,
@@ -514,7 +522,7 @@ export const usePipingStore = create<PipingState>((set, get) => {
         if (project) set({ statusMessage: `Proyecto "${project.name}" abierto. ${get().statusMessage}` });
       } catch (err) {
         console.error('Error inicializando estado de piping:', err);
-        set({ statusMessage: 'Error al inicializar la base de datos de especificaciones.' });
+        set({ statusMessage: 'No se pudo abrir la spec incluida en la app.' });
       }
       return project;
     },
@@ -586,7 +594,7 @@ export const usePipingStore = create<PipingState>((set, get) => {
       set({
         preferredFamilies: next,
         version: get().version + 1,
-        statusMessage: fam ? `Familia fija para ${category}: ${fam}` : `${category}: vuelve a la elección automática de la spec.`
+        statusMessage: fam ? `${pieceName(category)}: se usa siempre ${fam}.` : `${pieceName(category)}: vuelve a elegir la spec.`
       });
     },
 
@@ -600,7 +608,7 @@ export const usePipingStore = create<PipingState>((set, get) => {
       set({
         activeDirection: result,
         routeAxis: { axis: dir.clone().normalize(), result: result.clone() },
-        statusMessage: `Dirección de trazado: [${dir.x}, ${dir.y}, ${dir.z}]${how}`
+        statusMessage: `Trazado ${dirName(dir)}${how}`
       });
     },
 
@@ -1089,7 +1097,7 @@ export const usePipingStore = create<PipingState>((set, get) => {
         }
       }
 
-      set({ nominalDiameter: nd, statusMessage: `Diámetro Nominal seleccionado: ${nd}"` });
+      set({ nominalDiameter: nd, statusMessage: `Diámetro activo: ${formatSize(nd)}.` });
     },
 
     setNumpadValue: (val) => set({ numpadValue: val }),
@@ -1133,7 +1141,7 @@ export const usePipingStore = create<PipingState>((set, get) => {
           selectedComponentId: port.componentId,
           activeDirection: port.direction.clone().normalize(),
           nominalDiameter: port.connectedJointId ? get().nominalDiameter : port.nominalDiameter || get().nominalDiameter,
-          statusMessage: `Boca activa seleccionada: Puerto #${port.index} (${port.index === 3 ? 'Ramal 90°' : 'Línea Run'}) • Dir: [${port.direction.x.toFixed(1)}, ${port.direction.y.toFixed(1)}, ${port.direction.z.toFixed(1)}]`
+          statusMessage: `Boca activa: ${port.index === 3 ? 'ramal' : 'línea'} de ${formatSize(port.nominalDiameter)}, sale ${dirName(port.direction)}.`
         });
       } else {
         set({ selectedPortId: portId });
@@ -1158,12 +1166,12 @@ export const usePipingStore = create<PipingState>((set, get) => {
           selectedPortId: openPort.id,
           activeDirection: openPort.direction.clone().normalize(),
           nominalDiameter: openPort.nominalDiameter || get().nominalDiameter,
-          statusMessage: `Seleccionado: ${comp.parameters.description || comp.type} (${comp.parameters.nominalDiameter}") • Boca libre #${openPort.index} lista.`
+          statusMessage: `Elegido: ${comp.parameters.description || pieceName(comp.type)}. Su boca libre quedó activa.`
         });
       } else {
         set({
           selectedComponentId: comp.id,
-          statusMessage: `Seleccionado: ${comp.parameters.description || comp.type} (${comp.parameters.nominalDiameter}").`
+          statusMessage: `Elegido: ${comp.parameters.description || pieceName(comp.type)}.`
         });
       }
     },
@@ -1176,7 +1184,7 @@ export const usePipingStore = create<PipingState>((set, get) => {
         selectedComponentId: port.componentId,
         activeDirection: port.direction.clone().normalize(),
         nominalDiameter: port.nominalDiameter || get().nominalDiameter,
-        statusMessage: `COMMAND: PLANTPIPEADD • Continuando desde Boca #${port.index} (${port.index === 3 ? 'Ramal Derivación 90°' : 'Línea Principal Run'}) • Dir [${port.direction.x.toFixed(1)}, ${port.direction.y.toFixed(1)}, ${port.direction.z.toFixed(1)}]`
+        statusMessage: `Boca activa: ${port.index === 3 ? 'ramal' : 'línea'} de ${formatSize(port.nominalDiameter)}, sale ${dirName(port.direction)}.`
       });
     },
 
@@ -1184,7 +1192,7 @@ export const usePipingStore = create<PipingState>((set, get) => {
       const { graph, selectedPortId } = get();
       const openPorts = graph.getOpenPorts();
       if (openPorts.length === 0) {
-        set({ statusMessage: 'No hay bocas abiertas en la cañería.' });
+        set({ statusMessage: 'No hay bocas libres en el modelo.' });
         return;
       }
       const currentIndex = openPorts.findIndex((p) => p.id === selectedPortId);
@@ -1194,7 +1202,7 @@ export const usePipingStore = create<PipingState>((set, get) => {
         selectedComponentId: nextPort.componentId,
         activeDirection: nextPort.direction.clone().normalize(),
         nominalDiameter: nextPort.nominalDiameter || get().nominalDiameter,
-        statusMessage: `Boca activa cambiada (${((currentIndex + 1) % openPorts.length) + 1}/${openPorts.length}): Puerto #${nextPort.index} (${nextPort.index === 3 ? 'Ramal Tee' : 'Continuación'})`
+        statusMessage: `Boca ${((currentIndex + 1) % openPorts.length) + 1} de ${openPorts.length}: ${nextPort.index === 3 ? 'ramal' : 'línea'} de ${formatSize(nextPort.nominalDiameter)}.`
       });
     },
 
@@ -1272,7 +1280,7 @@ export const usePipingStore = create<PipingState>((set, get) => {
       pushUndoSnapshot();
       const updated = graph.updatePipeLength(targetId, newLengthMm);
       if (!updated) {
-        set({ statusMessage: 'Seleccione un tramo de cañería (PIPE) para cambiar su longitud.' });
+        set({ statusMessage: 'Elegí un caño para cambiarle el largo.' });
         return;
       }
       saveGraphToIndexedDb(graph.serialize());
@@ -1280,7 +1288,7 @@ export const usePipingStore = create<PipingState>((set, get) => {
       set({
         collidingComponentIds: collisions.collidingComponentIds,
         version: get().version + 1,
-        statusMessage: `Longitud de niple actualizada a ${newLengthMm.toFixed(0)} mm (línea aguas abajo desplazada).`
+        statusMessage: `Largo del caño: ${newLengthMm.toFixed(0)} mm (lo que sigue se corrió con él).`
       });
     },
 
@@ -1292,7 +1300,7 @@ export const usePipingStore = create<PipingState>((set, get) => {
       saveGraphToIndexedDb(graph.serialize());
       set({
         version: get().version + 1,
-        statusMessage: `Extremos del niple actualizados: [${endFinish1} / ${endFinish2}].`
+        statusMessage: `Extremos del caño: ${endFinish1} / ${endFinish2}.`
       });
     },
 
@@ -1321,21 +1329,19 @@ export const usePipingStore = create<PipingState>((set, get) => {
       saveGraphToIndexedDb(graph.serialize());
       set({
         version: get().version + 1,
-        statusMessage: `Propiedades de pieza actualizadas (${updated.type} • ${
-          metadata.nippleTag || metadata.lineNumber || updated.id
-        }).`
+        statusMessage: `Datos guardados: ${pieceNameLower(updated.type)}${metadata.nippleTag || metadata.lineNumber ? ` ${metadata.nippleTag || metadata.lineNumber}` : ''}.`
       });
     },
 
     splitSelectedPipeWithFitting: (fittingType, offsetMm, branchDir) => {
       const { graph, specReader, selectedComponentId, specCode, activeDirection } = get();
       if (!specReader || !selectedComponentId) {
-        set({ statusMessage: 'Seleccione primero un tramo de cañería (PIPE) en 3D para partirlo.' });
+        set({ statusMessage: 'Elegí primero un caño para partirlo.' });
         return;
       }
       const pipeComp = graph.components.get(selectedComponentId);
       if (!pipeComp || pipeComp.type !== 'PIPE') {
-        set({ statusMessage: 'La pieza seleccionada no es un caño recto.' });
+        set({ statusMessage: 'La pieza elegida no es un caño.' });
         return;
       }
 
@@ -1349,7 +1355,7 @@ export const usePipingStore = create<PipingState>((set, get) => {
           : specReader.findFlange(nd, specCode);
 
       if (!pipeSpec || !fitSpec) {
-        set({ statusMessage: `No se encontró especificación para ${fittingType} ND ${nd}".` });
+        set({ statusMessage: `La spec no tiene ${pieceNameLower(fittingType)} de ${formatSize(nd)}.` });
         return;
       }
 
@@ -1382,7 +1388,7 @@ export const usePipingStore = create<PipingState>((set, get) => {
           activeDirection: nextPort.direction.clone().normalize(),
           collidingComponentIds: collisions.collidingComponentIds,
           version: get().version + 1,
-          statusMessage: `COMMAND: PLANTFITTINGADD • Caño partido en 2 niples (${Math.round(result.pipe1.parameters.cutLength || 0)} mm y ${Math.round(result.pipe2.parameters.cutLength || 0)} mm) con ${fittingType} insertado en línea.`
+          statusMessage: `Caño partido en dos (${Math.round(result.pipe1.parameters.cutLength || 0)} mm y ${Math.round(result.pipe2.parameters.cutLength || 0)} mm) con ${aPiece(fittingType)} en el medio.`
         });
       } catch (e: unknown) {
         set({ statusMessage: (e as Error).message });
@@ -1392,7 +1398,7 @@ export const usePipingStore = create<PipingState>((set, get) => {
     setLineNumber: (tag) => {
       const { graph } = get();
       graph.activeLineNumber = tag;
-      set({ lineNumber: tag, statusMessage: `Line Number activo: ${tag}` });
+      set({ lineNumber: tag, statusMessage: `Línea activa: ${tag}` });
     },
 
     importPcfFile: (content, fileName) => {
@@ -1411,7 +1417,7 @@ export const usePipingStore = create<PipingState>((set, get) => {
           sourceName: fileName
         });
         if (componentCount === 0) {
-          set({ statusMessage: `El archivo "${fileName}" no contenía bloques PCF válidos.` });
+          set({ statusMessage: `"${fileName}" no tiene piezas de PCF que se puedan leer.` });
           return null;
         }
         undoSnapshots = [];
@@ -1430,7 +1436,7 @@ export const usePipingStore = create<PipingState>((set, get) => {
           collidingComponentIds: collisions.collidingComponentIds,
           version: get().version + 1,
           triggerFrameAll: get().triggerFrameAll + 1,
-          statusMessage: `COMMAND: PCFIMPORT • "${fileName}" cargado (${componentCount} piezas, ${pipeCount} caños, línea ${lineReference}, ${openPorts.length} bocas libres).${
+          statusMessage: `"${fileName}" cargado (${componentCount} piezas, ${pipeCount} caños, línea ${lineReference}, ${openPorts.length} bocas libres).${
             Object.keys(skipped).length
               ? ` Omitidos (Plant los regenera): ${Object.entries(skipped).map(([k, n]) => `${n} ${k}`).join(', ')}.`
               : ''
@@ -1440,7 +1446,7 @@ export const usePipingStore = create<PipingState>((set, get) => {
         });
         return importedGraph.serialize();
       } catch (e: unknown) {
-        set({ statusMessage: `Error importando PCF: ${(e as Error).message}` });
+        set({ statusMessage: `No se pudo importar el PCF: ${(e as Error).message}` });
         return null;
       }
     },
@@ -1450,7 +1456,7 @@ export const usePipingStore = create<PipingState>((set, get) => {
       const targetId =
         selectedComponentId || (selectedPortId ? graph.ports.get(selectedPortId)?.componentId || null : null);
       if (!targetId) {
-        set({ statusMessage: 'Seleccione una pieza o cañería para eliminarla.' });
+        set({ statusMessage: 'Elegí una pieza para borrarla.' });
         return;
       }
       pushUndoSnapshot();
@@ -1466,8 +1472,8 @@ export const usePipingStore = create<PipingState>((set, get) => {
         collidingComponentIds: collisions.collidingComponentIds,
         version: get().version + 1,
         statusMessage: removed
-          ? `Pieza eliminada (${removed.type} ${removed.parameters.nominalDiameter}").`
-          : 'Pieza eliminada.'
+          ? `${pieceName(removed.type)} de ${formatSize(removed.parameters.nominalDiameter)} borrada del modelo.`
+          : 'Pieza borrada.'
       });
     },
 
@@ -1507,13 +1513,13 @@ export const usePipingStore = create<PipingState>((set, get) => {
 
       const lengthMm = parseFloat(numpadValue);
       if (isNaN(lengthMm) || lengthMm <= 0) {
-        set({ statusMessage: 'Longitud inválida. Ingrese un valor mayor a cero en milímetros.' });
+        set({ statusMessage: 'Largo inválido: escribí un valor mayor a cero, en milímetros.' });
         return;
       }
 
       const pipeSpec = specReader.findPipe(nominalDiameter, specCode);
       if (!pipeSpec) {
-        set({ statusMessage: `Especificación no disponible para cañería ND ${nominalDiameter}".` });
+        set({ statusMessage: `La spec no tiene caño de ${formatSize(nominalDiameter)}.` });
         return;
       }
 
@@ -1569,7 +1575,7 @@ export const usePipingStore = create<PipingState>((set, get) => {
           selectedComponentId: pipe.id,
           collidingComponentIds: collisions.collidingComponentIds,
           version: get().version + 1,
-          statusMessage: `COMMAND: PLANTPIPEADD • Tramo inicial de ${lengthMm} mm trazado en dirección activa.`
+          statusMessage: `Primer tramo de ${lengthMm} mm trazado.`
         });
         return;
       }
@@ -1585,7 +1591,7 @@ export const usePipingStore = create<PipingState>((set, get) => {
 
       if (isOpposed) {
         set({
-          statusMessage: 'Dirección opuesta (180°). Seleccione un desvío angular válido (90° o 45°).'
+          statusMessage: 'No se puede volver hacia atrás (180°). Elegí otra dirección.'
         });
         return;
       }
@@ -1604,7 +1610,7 @@ export const usePipingStore = create<PipingState>((set, get) => {
           selectedComponentId: pipe.id,
           collidingComponentIds: collisions.collidingComponentIds,
           version: get().version + 1,
-          statusMessage: `COMMAND: PLANTPIPEADD • Cañería recta de ${lengthMm} mm añadida.${autoNote}`
+          statusMessage: `Caño de ${lengthMm} mm agregado.${autoNote}`
         });
         return;
       }
@@ -1655,7 +1661,7 @@ export const usePipingStore = create<PipingState>((set, get) => {
 
       if (lengthMm < takeOff) {
         set({
-          statusMessage: `Error: La longitud ${lengthMm} mm es menor que el take-off del codo (${takeOff.toFixed(1)} mm).`
+          statusMessage: `El tramo de ${lengthMm} mm es más corto que el codo (${Math.round(takeOff)} mm de centro a cara).`
         });
         return;
       }
@@ -1697,7 +1703,7 @@ export const usePipingStore = create<PipingState>((set, get) => {
             selectedComponentId: pipeOut.id,
             collidingComponentIds: collisions.collidingComponentIds,
             version: get().version + 1,
-            statusMessage: `COMMAND: PLANTPIPEADD • ${elbowSpec.shortDescription} (recorte previo: ${netIncoming.toFixed(1)} mm | saliente: ${netOutgoing.toFixed(1)} mm netos).${geomWarn(elbowSpec)}`
+            statusMessage: `${elbowSpec.shortDescription}: el caño anterior quedó en ${Math.round(netIncoming)} mm y el nuevo en ${Math.round(netOutgoing)} mm.${geomWarn(elbowSpec)}`
           });
         } else {
           const placement = calculateElbowPlacement(pStart, vertex, pNext, takeOff, elbowSpec.radius);
@@ -1715,12 +1721,12 @@ export const usePipingStore = create<PipingState>((set, get) => {
             selectedComponentId: pipeOut.id,
             collidingComponentIds: collisions.collidingComponentIds,
             version: get().version + 1,
-            statusMessage: `COMMAND: PLANTPIPEADD • ${elbowSpec.shortDescription} (saliente: ${netOutgoing.toFixed(1)} mm netos).${autoNote}${geomWarn(elbowSpec)}`
+            statusMessage: `${elbowSpec.shortDescription}: caño nuevo de ${Math.round(netOutgoing)} mm.${autoNote}${geomWarn(elbowSpec)}`
           });
         }
       } catch (e: unknown) {
         const err = e as Error;
-        set({ statusMessage: `Error al calcular codo: ${err.message}` });
+        set({ statusMessage: `No se pudo calcular el codo: ${err.message}` });
       }
     },
 
@@ -1838,7 +1844,7 @@ export const usePipingStore = create<PipingState>((set, get) => {
           collidingComponentIds: detectPipingCollisions(graph).collidingComponentIds,
           version: get().version + 1,
           canUndo: true,
-          statusMessage: `COMMAND: PLANTPIPEADD • Bocas conectadas con ${route.legs.length} tramo${route.legs.length > 1 ? 's' : ''} y ${route.bends} codo${route.bends === 1 ? '' : 's'} (${Math.round(route.totalLength)} mm de eje a eje).`
+          statusMessage: `Bocas conectadas con ${route.legs.length} tramo${route.legs.length > 1 ? 's' : ''} y ${route.bends} codo${route.bends === 1 ? '' : 's'} (${Math.round(route.totalLength)} mm de eje a eje).`
         });
       } finally {
         connectExecuting = false;
@@ -1907,7 +1913,7 @@ export const usePipingStore = create<PipingState>((set, get) => {
           activeDirection: active ? active.direction.clone().normalize() : get().activeDirection,
           collidingComponentIds: detectPipingCollisions(graph).collidingComponentIds,
           version: get().version + 1,
-          statusMessage: `COMMAND: PLANTSUBSTITUTE • Pieza sustituida por ${name}. Lo conectado a su salida se acomodó.`
+          statusMessage: `Pieza sustituida por ${name}. Lo conectado a su salida se acomodó.`
         });
       } catch (e) {
         set({ statusMessage: `No se pudo sustituir: ${(e as Error).message}` });
@@ -2013,7 +2019,7 @@ export const usePipingStore = create<PipingState>((set, get) => {
         collidingComponentIds: collisions.collidingComponentIds,
         canUndo: undoSnapshots.length > 0,
         canRedo: true,
-        statusMessage: 'COMMAND: UNDO • Acción deshecha con éxito.'
+        statusMessage: 'Deshecho.'
       });
     },
 
@@ -2042,7 +2048,7 @@ export const usePipingStore = create<PipingState>((set, get) => {
         collidingComponentIds: collisions.collidingComponentIds,
         canUndo: true,
         canRedo: redoSnapshots.length > 0,
-        statusMessage: 'COMMAND: REDO • Acción rehecha con éxito.'
+        statusMessage: 'Rehecho.'
       });
     },
 
@@ -2088,7 +2094,7 @@ export const usePipingStore = create<PipingState>((set, get) => {
         if (openPorts.length > 0) {
           port = openPorts[openPorts.length - 1];
         } else {
-          set({ statusMessage: 'No hay puertos abiertos disponibles para insertar el accesorio.' });
+          set({ statusMessage: 'No hay bocas libres donde poner la pieza.' });
           return;
         }
       }
@@ -2114,7 +2120,7 @@ export const usePipingStore = create<PipingState>((set, get) => {
         const lengthMm = parseFloat(numpadValue) || 500;
         const pipeSpec = specReader.findPipe(nominalDiameter, specCode);
         if (!pipeSpec) {
-          set({ statusMessage: `Cañería ND ${nominalDiameter}" no encontrada en catálogo.` });
+          set({ statusMessage: `La spec no tiene caño de ${formatSize(nominalDiameter)}.` });
           return;
         }
         const endPoint = port.position.clone().add(port.direction.clone().multiplyScalar(lengthMm));
@@ -2128,7 +2134,7 @@ export const usePipingStore = create<PipingState>((set, get) => {
           activeDirection: newPipe.ports[1].direction.clone().normalize(),
           collidingComponentIds: collisions.collidingComponentIds,
           version: get().version + 1,
-          statusMessage: `COMMAND: PLANTPIPEADD • Tramo de ${lengthMm} mm insertado.${autoNote}`
+          statusMessage: `Caño de ${lengthMm} mm agregado.${autoNote}`
         });
         return;
       }
@@ -2175,7 +2181,7 @@ export const usePipingStore = create<PipingState>((set, get) => {
           activeDirection: uOut.clone().normalize(),
           collidingComponentIds: collisions.collidingComponentIds,
           version: get().version + 1,
-          statusMessage: `COMMAND: PLANTFITTINGADD • ${elbowSpec.shortDescription} insertado. Use 'Girar 90°' para orientar la salida.${autoNote}${geomWarn(elbowSpec)}`
+          statusMessage: `${elbowSpec.shortDescription}. Para orientar la salida, mantené apretado el codo y elegí Girar 90°.${autoNote}${geomWarn(elbowSpec)}`
         });
         return;
       }
@@ -2298,8 +2304,8 @@ export const usePipingStore = create<PipingState>((set, get) => {
           collidingComponentIds: collisions.collidingComponentIds,
           version: get().version + 1,
           statusMessage: options?.continueOnBranch
-            ? `COMMAND: PLANTFITTINGADD • ${teeSpec.shortDescription}. Continuando por el ramal.${autoNote}${geomWarn(teeSpec)}`
-            : `COMMAND: PLANTFITTINGADD • ${teeSpec.shortDescription}. Elija 'Línea Recta' o 'Ramal 90°' en el panel de la Te.${autoNote}${geomWarn(teeSpec)}`
+            ? `${teeSpec.shortDescription}. Continuando por el ramal.${autoNote}${geomWarn(teeSpec)}`
+            : `${teeSpec.shortDescription}. Tocá la boca por la que querés seguir: la línea o el ramal.${autoNote}${geomWarn(teeSpec)}`
         });
         return;
       }
@@ -2378,7 +2384,7 @@ export const usePipingStore = create<PipingState>((set, get) => {
           activeDirection: nextPort ? nextPort.direction.clone().normalize() : get().activeDirection,
           collidingComponentIds: collisions.collidingComponentIds,
           version: get().version + 1,
-          statusMessage: `COMMAND: PLANTFITTINGADD • ${capSpec.shortDescription} colocado.${autoNote}${geomWarn(capSpec)}`
+          statusMessage: `${capSpec.shortDescription}. La línea quedó cerrada.${autoNote}${geomWarn(capSpec)}`
         });
         return;
       }
@@ -2398,7 +2404,7 @@ export const usePipingStore = create<PipingState>((set, get) => {
         snappedPortId: null,
         collidingComponentIds: new Set(),
         version: get().version + 1,
-        statusMessage: 'Escena de cañerías reiniciada.'
+        statusMessage: 'Modelo vaciado.'
       });
     }
   };
