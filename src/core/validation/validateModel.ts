@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { isFaceEnd, PipingGraph } from '../graph/PipingGraph';
 import { Component } from '../../types/piping';
+import { pieceName } from '../pieceNames';
 
 export type IssueSeverity = 'error' | 'warning' | 'info';
 
@@ -33,25 +34,11 @@ export interface ValidateOptions {
   maxJointAngleDeg?: number;
 }
 
-const TYPE_NAME: Record<string, string> = {
-  PIPE: 'Caño',
-  ELBOW: 'Codo',
-  TEE: 'Te',
-  FLANGE: 'Brida',
-  VALVE: 'Válvula',
-  REDUCER: 'Reducción',
-  CAP: 'Tapa',
-  OLET: 'Derivación',
-  CROSS: 'Cruz',
-  COUPLING: 'Cupla',
-  INSTRUMENT: 'Instrumento'
-};
-
 const ORDER: Record<IssueSeverity, number> = { error: 0, warning: 1, info: 2 };
 
 function name(comp: Component): string {
   const nd = comp.ports[0]?.nominalDiameter || comp.parameters.nominalDiameter;
-  return `${TYPE_NAME[comp.type] ?? comp.type} ${nd}"`;
+  return `${pieceName(comp.type)} ${nd}"`;
 }
 
 /**
@@ -149,7 +136,7 @@ export function validateModel(graph: PipingGraph, options: ValidateOptions = {})
         issues.push({
           code: 'SHORT_NIPPLE',
           severity: 'warning',
-          title: `Niple de ${Math.round(length)} mm (mínimo ${Math.round(min)} mm)`,
+          title: `Caño corto: ${Math.round(length)} mm (mínimo ${Math.round(min)} mm)`,
           detail: `${name(comp)}: quedó más corto que dos diámetros. Cuesta soldarlo y alinearlo.`,
           componentIds: [comp.id]
         });

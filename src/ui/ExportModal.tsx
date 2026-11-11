@@ -121,7 +121,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
           {/* Campo de Referencia de Línea */}
           <div className="bg-[#181a20] p-3 rounded-lg border border-[#3a3f4d]">
             <label className="text-[10px] uppercase font-bold text-slate-400 block mb-1">
-              Line Number / Pipeline Reference
+              Número de línea
             </label>
             <input
               type="text"
@@ -169,7 +169,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
                     : ''}
                 </>
               ) : (
-                <>Con soldaduras, juntas, bulones, tabla MATERIALS y los datos de taller de cada niple (tag y bisel), para Isogen o para volver a abrirlo en la app.</>
+                <>Con soldaduras, juntas, bulones, tabla MATERIALS y los datos de taller de cada caño (número y bisel), para Isogen o para volver a abrirlo en la app.</>
               )}
             </p>
 

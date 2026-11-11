@@ -54,26 +54,28 @@ export const PROPERTY_FIELD_LABELS: Record<
   keyof PropertyFieldsConfig,
   { label: string; category: 'GENERAL' | 'GEOMETRY' | 'CONNECTIONS' | 'COORDINATES' | 'ACTIONS' }
 > = {
-  nippleTag: { label: 'Tag / N.º Niple (N-01)', category: 'GENERAL' },
-  lineNumber: { label: 'Número de Línea (Line Number)', category: 'GENERAL' },
-  specAndCatalog: { label: 'Descripción de Catálogo (.pspc)', category: 'GENERAL' },
-  nominalAndSchedule: { label: 'Diámetro Nominal (ND) y Schedule', category: 'GEOMETRY' },
-  odAndThickness: { label: 'Diámetro Exterior (OD) y Espesor (mm)', category: 'GEOMETRY' },
-  cutLength: { label: 'Largo Neto de Corte (Editable)', category: 'GEOMETRY' },
-  grossLength: { label: 'Largo Bruto Eje a Eje (mm)', category: 'GEOMETRY' },
-  fittingDimensions: { label: 'Cotas de Accesorio (Take-Off / Radio)', category: 'GEOMETRY' },
-  endFinishes: { label: 'Preparación de Extremos (Bisel/Plano/Rosc.)', category: 'CONNECTIONS' },
-  endTypes: { label: 'Tipo de Extremo ASME (BW/FLANG/THD)', category: 'CONNECTIONS' },
-  fasteners: { label: 'Juntas y Espárragos (P3dJoint)', category: 'CONNECTIONS' },
-  portsXyz: { label: 'Coordenadas 3D de Bocas (X, Y, Z)', category: 'COORDINATES' },
-  elevationBop: { label: 'Elevación Eje Z y Cota Inferior (BOP)', category: 'COORDINATES' },
-  branchSelection: { label: 'Selector de Derivación Te (#2 / #3)', category: 'ACTIONS' },
-  axialRotation: { label: 'Giro Axial (+90° / -90° / +45° / 180°)', category: 'ACTIONS' },
-  pipeSplit: { label: 'Partir Caño e Insertar (+Te / +Válv / +Brida)', category: 'ACTIONS' },
-  deleteButton: { label: 'Botón Eliminar Pieza', category: 'ACTIONS' }
+  nippleTag: { label: 'Identificación del caño (N-01)', category: 'GENERAL' },
+  lineNumber: { label: 'Número de línea', category: 'GENERAL' },
+  specAndCatalog: { label: 'Spec y descripción de la pieza', category: 'GENERAL' },
+  nominalAndSchedule: { label: 'Diámetro y schedule', category: 'GEOMETRY' },
+  odAndThickness: { label: 'Diámetro exterior y espesor (mm)', category: 'GEOMETRY' },
+  cutLength: { label: 'Largo del caño (editable)', category: 'GEOMETRY' },
+  grossLength: { label: 'Largo de eje a eje (mm)', category: 'GEOMETRY' },
+  fittingDimensions: { label: 'Medidas del accesorio (centro a cara, radio)', category: 'GEOMETRY' },
+  endFinishes: { label: 'Preparación de extremos (bisel, plano, rosca)', category: 'CONNECTIONS' },
+  endTypes: { label: 'Tipo de extremo (a tope, brida, rosca)', category: 'CONNECTIONS' },
+  fasteners: { label: 'Juntas y bulones', category: 'CONNECTIONS' },
+  portsXyz: { label: 'Coordenadas de las bocas (X, Y, Z)', category: 'COORDINATES' },
+  elevationBop: { label: 'Elevación de eje y de fondo de caño', category: 'COORDINATES' },
+  branchSelection: { label: 'Te: seguir por la línea o por el ramal', category: 'ACTIONS' },
+  axialRotation: { label: 'Girar la pieza sobre el caño', category: 'ACTIONS' },
+  pipeSplit: { label: 'Partir el caño con te, válvula o bridas', category: 'ACTIONS' },
+  deleteButton: { label: 'Botón para borrar la pieza', category: 'ACTIONS' }
 };
 
 const STORAGE_KEY = 'achero_p3d_ui_config_v1';
+/** Sube cuando cambia la disposición inicial: las posiciones guardadas antes se descartan */
+const LAYOUT_VERSION = 2;
 const TOUR_DONE_KEY = 'achero_p3d_tour_done_v1';
 const RECENT_PIECES_KEY = 'achero_p3d_recent_pieces_v1';
 
@@ -100,6 +102,18 @@ const getDefaultPalettes = (): Record<PaletteId, PaletteWindowState> => {
   const w = typeof window !== 'undefined' ? window.innerWidth : 1024;
   const h = typeof window !== 'undefined' ? window.innerHeight : 768;
 
+  // Medidas reales de cada paleta abierta, para que al arrancar ninguna tape a otra:
+  // Piezas a la izquierda, Bocas libres y Propiedades al lado, Vistas arriba a la derecha
+  // y Trazar abajo, a la derecha de donde se despliega Propiedades si la ventana da.
+  const SIDE_X = 190;
+  const PROPERTIES_W = 325;
+  const COMPASS_W = 245;
+  const NUMPAD_W = Math.min(w - 24, 542);
+  const NUMPAD_H = 204;
+  const centred = Math.max(12, Math.round((w - NUMPAD_W) / 2));
+  const besideProperties = SIDE_X + PROPERTIES_W + 10;
+  const numpadX = besideProperties + NUMPAD_W + 12 <= w ? Math.max(centred, besideProperties) : centred;
+
   return {
     tools: {
       isOpen: true,
@@ -111,7 +125,7 @@ const getDefaultPalettes = (): Record<PaletteId, PaletteWindowState> => {
     openPorts: {
       isOpen: true,
       isCollapsed: false,
-      x: 84,
+      x: SIDE_X,
       y: 84,
       zIndex: 22
     },
@@ -119,22 +133,22 @@ const getDefaultPalettes = (): Record<PaletteId, PaletteWindowState> => {
       isOpen: true,
       // Plegada por defecto: solo se despliega al seleccionar pieza y pulsar "Propiedades"
       isCollapsed: true,
-      x: 84,
-      y: 130,
+      x: SIDE_X,
+      y: 166,
       zIndex: 25
     },
     compass: {
       isOpen: true,
       isCollapsed: false,
-      x: Math.max(12, w - 164),
+      x: Math.max(12, w - COMPASS_W - 12),
       y: 84,
       zIndex: 23
     },
     numpad: {
       isOpen: true,
       isCollapsed: false,
-      x: Math.max(12, Math.round((w - Math.min(w - 24, 540)) / 2)),
-      y: Math.max(90, h - 125),
+      x: numpadX,
+      y: Math.max(90, h - NUMPAD_H - 12),
       zIndex: 24
     }
   };
@@ -204,6 +218,7 @@ interface UiConfigState {
 }
 
 const loadPersistedState = (): Partial<{
+  layoutVersion: number;
   palettes: Record<PaletteId, PaletteWindowState>;
   toolsLayout: ToolsLayoutMode;
   propertyFields: PropertyFieldsConfig;
@@ -212,7 +227,9 @@ const loadPersistedState = (): Partial<{
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     if (!raw) return {};
-    return JSON.parse(raw);
+    const saved = JSON.parse(raw);
+    if (saved.layoutVersion !== LAYOUT_VERSION) delete saved.palettes;
+    return saved;
   } catch {
     return {};
   }
@@ -228,6 +245,7 @@ const savePersistedState = (state: {
     window.localStorage.setItem(
       STORAGE_KEY,
       JSON.stringify({
+        layoutVersion: LAYOUT_VERSION,
         palettes: state.palettes,
         toolsLayout: state.toolsLayout,
         propertyFields: state.propertyFields

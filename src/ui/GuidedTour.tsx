@@ -45,6 +45,12 @@ const STEPS: TourStep[] = [
     panel: 'trazar'
   },
   {
+    title: 'Llegar justo a un lugar',
+    text: 'Alinear calcula el largo hasta quedar en línea con la boca o la pieza que toques. Boca, en la fila de arriba, muestra las coordenadas y la elevación de la boca activa, y lleva la línea al punto que escribas.',
+    target: 'align-tools',
+    panel: 'trazar'
+  },
+  {
     title: 'Piezas',
     text: 'Codos, tes, válvulas, bridas y reducciones: se ponen en la boca activa.',
     target: 'tab-piezas',
@@ -53,18 +59,18 @@ const STEPS: TourStep[] = [
   },
   {
     title: 'Tocar el modelo',
-    text: 'Un toque elige una pieza o una boca. Mantené apretada una pieza y se abre su menú: partir, derivar, soporte, nota de campo, borrar. Doble toque la encuadra.',
+    text: 'Un toque elige una pieza o una boca. Mantené apretada una pieza y se abre su menú: partir, derivar, dar vuelta, purga o venteo, cambiar el diámetro del tramo, soporte, nota de campo, borrar. Doble toque la encuadra.',
     panel: null
   },
   {
     title: 'Vistas',
-    text: 'Tocá una cara del cubo para ver de frente, de costado o en planta. En la pestaña Vistas están medir, aislar una línea y la caja de corte.',
+    text: 'Tocá una cara del cubo para ver de frente, de costado o en planta. En Vistas también están medir, aislar una línea, la caja de corte, las etiquetas con cotas y elevaciones (tocás una cota y cambiás el largo) y la referencia de obra desde un DXF.',
     target: 'cube',
     panel: null
   },
   {
     title: 'Ayuda y revisión',
-    text: 'El signo de pregunta muestra todos los gestos y repite este recorrido. Cuando hay piezas, al lado aparece la revisión: avisa de choques, uniones mal armadas y niples cortos.',
+    text: 'El signo de pregunta muestra todos los gestos y repite este recorrido. Cuando hay piezas, al lado aparece la revisión: avisa de choques, uniones mal armadas y caños demasiado cortos.',
     target: 'help',
     panel: null
   },

@@ -6,6 +6,7 @@ import {
   PropertyFieldsConfig
 } from '../store/useUiConfigStore';
 import { NippleEndFinish } from '../types/piping';
+import { pieceName } from '../core/pieceNames';
 import { FloatingPalette } from './FloatingPalette';
 import { usePhoneLayout } from './useIsPhone';
 
@@ -95,7 +96,7 @@ export const PropertiesInspector: React.FC = () => {
     vibrate(15);
     if (!selectedComp) {
       usePipingStore.setState({
-        statusMessage: 'Toque primero una cañería o accesorio en 3D para ver sus propiedades.'
+        statusMessage: 'Tocá primero una pieza para ver sus propiedades.'
       });
       return;
     }
@@ -116,7 +117,7 @@ export const PropertiesInspector: React.FC = () => {
       {openPorts.length > 0 && (
         <FloatingPalette
           paletteId="openPorts"
-          title="Bocas Libres"
+          title="Bocas libres"
           icon={<span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse inline-block" />}
           badge={
             <span className="px-1.5 py-0.2 rounded bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 font-mono font-black text-[9px]">
@@ -138,9 +139,9 @@ export const PropertiesInspector: React.FC = () => {
               cycleOpenPort();
             }}
             className="px-2.5 py-1 rounded bg-[#0696d7] hover:bg-[#0582ba] text-white font-bold text-[10px] font-mono flex items-center gap-1 shadow active:scale-95 transition-all flex-shrink-0"
-            title="Saltar a la siguiente boca o ramal abierto"
+            title="Saltar a la siguiente boca libre"
           >
-            <span>⇄ Cambiar Boca/Ramal</span>
+            <span>⇄ Otra boca</span>
           </button>
         </FloatingPalette>
       )}
@@ -158,7 +159,7 @@ export const PropertiesInspector: React.FC = () => {
         badge={
           selectedComp ? (
             <span className="px-1.5 py-0.5 rounded bg-[#0696d7]/25 border border-[#38bdf8]/60 text-[#38bdf8] font-mono font-black text-[9px]">
-              {selectedComp.type} {selectedComp.ports[0]?.nominalDiameter || nominalDiameter}&quot;
+              {pieceName(selectedComp.type)} {selectedComp.ports[0]?.nominalDiameter || nominalDiameter}&quot;
             </span>
           ) : (
             <span className="px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-400 font-mono text-[9px]">
@@ -299,7 +300,7 @@ export const PropertiesInspector: React.FC = () => {
               <div className="bg-[#1b2029] border border-[#2d3545] rounded-md p-2 space-y-1.5">
                 <div className="flex items-center justify-between border-b border-[#282f3d] pb-1">
                   <span className="text-[9px] font-mono font-bold uppercase tracking-wider text-[#38bdf8]">
-                    Identificación CAD
+                    Identificación
                   </span>
                   {propertyFields.deleteButton && (
                     <button
@@ -309,7 +310,7 @@ export const PropertiesInspector: React.FC = () => {
                         deleteSelectedComponent();
                       }}
                       className="px-2 py-0.5 rounded bg-rose-950/80 hover:bg-rose-800 border border-rose-500/60 text-rose-200 font-bold text-[9px] active:scale-95 transition-all"
-                      title="Eliminar esta pieza del modelo 3D (DELETE)"
+                      title="Borrar esta pieza"
                     >
                       🗑 Borrar Pieza
                     </button>
@@ -320,7 +321,7 @@ export const PropertiesInspector: React.FC = () => {
                   {propertyFields.nippleTag && (
                     <div>
                       <span className="text-[9px] font-mono text-slate-400 block">
-                        Tag / ID Pieza:
+                        Identificación:
                       </span>
                       <input
                         type="text"
@@ -343,7 +344,7 @@ export const PropertiesInspector: React.FC = () => {
                   {propertyFields.lineNumber && (
                     <div>
                       <span className="text-[9px] font-mono text-slate-400 block">
-                        Line Number:
+                        Número de línea:
                       </span>
                       <input
                         type="text"
@@ -366,7 +367,7 @@ export const PropertiesInspector: React.FC = () => {
                 {propertyFields.specAndCatalog && (
                   <div className="pt-1 border-t border-[#252b38] flex flex-col gap-0.5 text-[10px] font-mono">
                     <div className="flex justify-between text-slate-300">
-                      <span className="text-slate-400">Spec / Catálogo:</span>
+                      <span className="text-slate-400">Spec y pieza:</span>
                       <span className="font-bold text-sky-300">
                         {selectedComp.specCode || specCode} • #{selectedComp.catalogId}
                       </span>
@@ -378,7 +379,7 @@ export const PropertiesInspector: React.FC = () => {
                     )}
                     {(selectedComp.parameters.skey || selectedComp.ports.some((p) => p.plantEndType)) && (
                       <div className="flex justify-between text-slate-300">
-                        <span className="text-slate-400">SKEY / extremos:</span>
+                        <span className="text-slate-400">Extremos (SKEY):</span>
                         <span className="font-bold text-slate-200">
                           {selectedComp.parameters.skey || '—'} •{' '}
                           {selectedComp.ports.map((p) => p.plantEndType || p.endType).join('/')}
@@ -397,9 +398,9 @@ export const PropertiesInspector: React.FC = () => {
                         title={selectedComp.parameters.geometryNote}
                       >
                         {selectedComp.parameters.geometryConfidence === 'verified'
-                          ? '✓ Puertos verificados con Plant 3D'
+                          ? '✓ Bocas verificadas con Plant 3D'
                           : selectedComp.parameters.geometryConfidence === 'standard'
-                          ? '≈ Puertos según norma, sin verificar en Plant'
+                          ? '≈ Bocas según norma, sin verificar en Plant'
                           : `! Geometría aproximada${selectedComp.parameters.geometryNote ? `: ${selectedComp.parameters.geometryNote}` : ''}`}
                       </span>
                     )}
@@ -416,14 +417,14 @@ export const PropertiesInspector: React.FC = () => {
               propertyFields.fittingDimensions) && (
               <div className="bg-[#1b2029] border border-[#2d3545] rounded-md p-2 space-y-1.5">
                 <span className="text-[9px] font-mono font-bold uppercase tracking-wider text-emerald-400 block border-b border-[#282f3d] pb-1">
-                  Geometría y Dimensiones
+                  Medidas
                 </span>
 
                 <div className="grid grid-cols-2 gap-x-2 gap-y-1 text-[10px] font-mono">
                   {propertyFields.nominalAndSchedule && (
                     <>
                       <div className="flex justify-between">
-                        <span className="text-slate-400">ND:</span>
+                        <span className="text-slate-400">Diámetro:</span>
                         <span className="font-bold text-white">
                           {selectedComp.parameters.nominalDiameter}&quot;
                           {selectedComp.parameters.reducedNominalDiameter
@@ -443,7 +444,7 @@ export const PropertiesInspector: React.FC = () => {
                   {propertyFields.odAndThickness && (
                     <>
                       <div className="flex justify-between">
-                        <span className="text-slate-400">OD Real:</span>
+                        <span className="text-slate-400">Diámetro exterior:</span>
                         <span className="text-sky-300">
                           {(selectedComp.parameters.outerDiameter || 60.3).toFixed(1)} mm
                         </span>
@@ -459,7 +460,7 @@ export const PropertiesInspector: React.FC = () => {
 
                   {propertyFields.grossLength && selectedComp.type === 'PIPE' && (
                     <div className="col-span-2 flex justify-between pt-0.5 border-t border-[#252b38]">
-                      <span className="text-slate-400">Largo Bruto Eje a Eje:</span>
+                      <span className="text-slate-400">Largo de eje a eje:</span>
                       <span className="font-bold text-slate-200">
                         {Math.round(
                           selectedComp.parameters.grossLength ||
@@ -475,7 +476,7 @@ export const PropertiesInspector: React.FC = () => {
                     <div className="col-span-2 pt-0.5 border-t border-[#252b38] grid grid-cols-2 gap-x-2 gap-y-0.5">
                       {selectedComp.parameters.takeOff !== undefined && (
                         <div className="flex justify-between">
-                          <span className="text-slate-400">Take-Off:</span>
+                          <span className="text-slate-400">Centro a cara:</span>
                           <span className="text-emerald-300">
                             {selectedComp.parameters.takeOff.toFixed(1)} mm
                           </span>
@@ -489,7 +490,7 @@ export const PropertiesInspector: React.FC = () => {
                       )}
                       {selectedComp.parameters.runTakeOff !== undefined && (
                         <div className="flex justify-between">
-                          <span className="text-slate-400">Run (C):</span>
+                          <span className="text-slate-400">Centro a cara, línea:</span>
                           <span className="text-emerald-300">
                             {selectedComp.parameters.runTakeOff.toFixed(1)} mm
                           </span>
@@ -497,7 +498,7 @@ export const PropertiesInspector: React.FC = () => {
                       )}
                       {selectedComp.parameters.branchTakeOff !== undefined && (
                         <div className="flex justify-between">
-                          <span className="text-slate-400">Branch (M):</span>
+                          <span className="text-slate-400">Centro a cara, ramal:</span>
                           <span className="text-amber-300">
                             {selectedComp.parameters.branchTakeOff.toFixed(1)} mm
                           </span>
@@ -505,7 +506,7 @@ export const PropertiesInspector: React.FC = () => {
                       )}
                       {selectedComp.parameters.faceToFace !== undefined && (
                         <div className="col-span-2 flex justify-between">
-                          <span className="text-slate-400">Cara a Cara (F2F):</span>
+                          <span className="text-slate-400">Cara a cara:</span>
                           <span className="text-purple-300">
                             {selectedComp.parameters.faceToFace.toFixed(1)} mm
                           </span>
@@ -519,7 +520,7 @@ export const PropertiesInspector: React.FC = () => {
                 {propertyFields.cutLength && selectedComp.type === 'PIPE' && (
                   <div className="pt-1 border-t border-[#252b38] flex flex-col gap-1">
                     <span className="text-[9px] font-mono text-slate-300">
-                      Largo Neto del Niple (mm):
+                      Largo del caño (mm):
                     </span>
                     <div className="flex items-center gap-1">
                       <input
@@ -581,7 +582,7 @@ export const PropertiesInspector: React.FC = () => {
               propertyFields.fasteners) && (
               <div className="bg-[#1b2029] border border-[#2d3545] rounded-md p-2 space-y-1.5">
                 <span className="text-[9px] font-mono font-bold uppercase tracking-wider text-amber-400 block border-b border-[#282f3d] pb-1">
-                  Extremos y Uniones
+                  Extremos y uniones
                 </span>
 
                 {propertyFields.endFinishes && selectedComp.type === 'PIPE' && (
@@ -631,7 +632,7 @@ export const PropertiesInspector: React.FC = () => {
 
                 {propertyFields.endTypes && (
                   <div className="flex items-center justify-between text-[10px] font-mono">
-                    <span className="text-slate-400">Conexión Bocas:</span>
+                    <span className="text-slate-400">Uniones:</span>
                     <span className="text-slate-200 font-bold">
                       {selectedComp.ports.map((p) => `#${p.index}:${p.endType}`).join(' • ')}
                     </span>
@@ -661,17 +662,17 @@ export const PropertiesInspector: React.FC = () => {
             {(propertyFields.elevationBop || propertyFields.portsXyz) && p1 && (
               <div className="bg-[#1b2029] border border-[#2d3545] rounded-md p-2 space-y-1 font-mono text-[10px]">
                 <span className="text-[9px] font-bold uppercase tracking-wider text-purple-300 block border-b border-[#282f3d] pb-1">
-                  Coordenadas WCS y Elevación
+                  Coordenadas y elevación
                 </span>
 
                 {propertyFields.elevationBop && (
                   <div className="grid grid-cols-2 gap-2">
                     <div className="flex justify-between">
-                      <span className="text-slate-400">Eje Z:</span>
+                      <span className="text-slate-400">Eje (Z):</span>
                       <span className="text-sky-300 font-bold">{Math.round(centerZ)} mm</span>
                     </div>
-                    <div className="flex justify-between" title="Bottom of Pipe (Cota inferior del caño)">
-                      <span className="text-slate-400">BOP:</span>
+                    <div className="flex justify-between" title="Fondo de caño (BOP)">
+                      <span className="text-slate-400">Fondo:</span>
                       <span className="text-emerald-300 font-bold">{Math.round(bopZ)} mm</span>
                     </div>
                   </div>
@@ -691,7 +692,7 @@ export const PropertiesInspector: React.FC = () => {
                     )}
                     {p3 && (
                       <div>
-                        <span className="text-amber-400">P3 (Ramal):</span> [{Math.round(p3.x)},{' '}
+                        <span className="text-amber-400">P3 (ramal):</span> [{Math.round(p3.x)},{' '}
                         {Math.round(p3.y)}, {Math.round(p3.z)}]
                       </div>
                     )}
@@ -706,7 +707,7 @@ export const PropertiesInspector: React.FC = () => {
               propertyFields.pipeSplit) && (
               <div className="bg-[#1b2029] border border-[#2d3545] rounded-md p-2 space-y-2">
                 <span className="text-[9px] font-mono font-bold uppercase tracking-wider text-cyan-300 block border-b border-[#282f3d] pb-1">
-                  Acciones en Pieza 3D
+                  Acciones
                 </span>
 
                 {/* Derivación Te */}
@@ -726,7 +727,7 @@ export const PropertiesInspector: React.FC = () => {
                             : 'bg-[#232832] text-slate-200 border-[#3a4150] hover:border-emerald-400'
                         }`}
                       >
-                        <span>Seguir Línea (#2)</span>
+                        <span>Seguir por la línea</span>
                       </button>
 
                       <button
@@ -741,7 +742,7 @@ export const PropertiesInspector: React.FC = () => {
                             : 'bg-[#232832] text-amber-300 border-amber-500/50 hover:bg-amber-950/50'
                         }`}
                       >
-                        <span>Salir Ramal (#3)</span>
+                        <span>Salir por el ramal</span>
                       </button>
                     </div>
                   )}

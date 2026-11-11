@@ -74,7 +74,7 @@ export const TopNavigation: React.FC = () => {
       togglePaletteCollapsed('properties', true);
       usePipingStore.setState({
         statusMessage:
-          'Seleccione una pieza en el visor 3D y presione "Propiedades" para desplegar sus datos.'
+          'Tocá una pieza del modelo y después Propiedades para ver sus datos.'
       });
       return;
     }
@@ -100,7 +100,7 @@ export const TopNavigation: React.FC = () => {
   const handleQuickExportPcf = () => {
     if (graph.components.size === 0) {
       usePipingStore.setState({
-        statusMessage: 'No hay componentes en el modelo 3D para exportar a .PCF.'
+        statusMessage: 'No hay piezas en el modelo para exportar.'
       });
       return;
     }
@@ -149,7 +149,7 @@ export const TopNavigation: React.FC = () => {
       { label: 'Abrir PCF', hint: 'Desde Plant 3D', Icon: Upload, onClick: () => pcfInputRef.current?.click(), tone: 'text-amber-300' },
       { label: 'Exportar PCF', hint: 'Para PCF to Pipe', Icon: Download, onClick: handleQuickExportPcf, tone: 'text-sky-300', disabled: graph.components.size === 0 },
       { label: 'Spools', hint: 'Taller y campo', Icon: Layers, onClick: toggleSpools, tone: 'text-amber-300' },
-      { label: 'Cortes y BOM', hint: 'Lista de materiales', Icon: ListChecks, onClick: toggleBom, tone: 'text-emerald-300' },
+      { label: 'Cortes y materiales', hint: 'Lista de materiales', Icon: ListChecks, onClick: toggleBom, tone: 'text-emerald-300' },
       { label: 'Planos', hint: 'Isométricos y DXF', Icon: FileText, onClick: toggleExport, tone: 'text-sky-300' },
       { label: 'Cargar spec', hint: '.pspc y .pspx', Icon: Database, onClick: () => fileInputRef.current?.click() },
       { label: 'Encuadrar', hint: 'Ver todo el modelo', Icon: Maximize, onClick: frameAll },
@@ -286,7 +286,7 @@ export const TopNavigation: React.FC = () => {
               className="px-2 py-0.5 text-slate-400 hover:text-slate-200 cursor-pointer"
               onClick={toggleBom}
             >
-              Lista de Cortes / BOM
+              Cortes y materiales
             </span>
             <span className="px-2 py-0.5 text-slate-400 hover:text-slate-200 cursor-pointer" onClick={toggleSpools}>
               Spools
@@ -312,7 +312,7 @@ export const TopNavigation: React.FC = () => {
                 ? 'bg-[#232832] text-sky-300 border-[#38bdf8]/50 font-bold'
                 : 'bg-[#161920] text-slate-500 border-[#292e39] hover:text-slate-300'
             }`}
-            title="Mostrar / Ocultar Paleta de Piezas"
+            title="Mostrar u ocultar Piezas"
           >
             🧰 Piezas
           </button>
@@ -329,7 +329,7 @@ export const TopNavigation: React.FC = () => {
                 ? 'bg-[#232832] text-slate-300 border-[#38bdf8]/40'
                 : 'bg-[#161920] text-slate-500 border-[#292e39] hover:text-slate-300'
             }`}
-            title="Desplegar / Plegar Paleta de Propiedades de la pieza seleccionada"
+            title="Mostrar u ocultar Propiedades de la pieza elegida"
           >
             📋 Propiedades
           </button>
@@ -342,7 +342,7 @@ export const TopNavigation: React.FC = () => {
                 ? 'bg-[#232832] text-sky-300 border-[#38bdf8]/50 font-bold'
                 : 'bg-[#161920] text-slate-500 border-[#292e39] hover:text-slate-300'
             }`}
-            title="Mostrar / Ocultar ViewCube 3D"
+            title="Mostrar u ocultar Vistas"
           >
             🧊 ViewCube
           </button>
@@ -355,7 +355,7 @@ export const TopNavigation: React.FC = () => {
                 ? 'bg-[#232832] text-sky-300 border-[#38bdf8]/50 font-bold'
                 : 'bg-[#161920] text-slate-500 border-[#292e39] hover:text-slate-300'
             }`}
-            title="Mostrar / Ocultar Línea de Comando / Trazado"
+            title="Mostrar u ocultar Trazar"
           >
             ⌨ Comando
           </button>
@@ -364,7 +364,7 @@ export const TopNavigation: React.FC = () => {
             type="button"
             onClick={resetWorkspaceLayout}
             className="px-1.5 py-0.5 rounded bg-[#1d222c] hover:bg-[#2b3240] text-amber-300 border border-[#343b48] font-bold"
-            title="Restaurar posición y visibilidad de todas las paletas"
+            title="Volver a acomodar todas las paletas"
           >
             ⊞ Reset Vista
           </button>
@@ -397,14 +397,14 @@ export const TopNavigation: React.FC = () => {
           {/* Selector / Editor de Line Number (como Plant 3D Route Pipe) */}
           <div className="flex flex-col bg-[#161920] border border-[#343b48] rounded px-1.5 py-0.5">
             <span className="text-[7px] uppercase text-slate-400 font-bold leading-none mb-0.5">
-              Line Number
+              Línea
             </span>
             <input
               type="text"
               value={lineNumber}
               onChange={(e) => setLineNumber(e.target.value)}
               className="w-24 sm:w-28 bg-transparent text-[11px] font-mono font-bold text-amber-300 outline-none leading-tight"
-              title="Número de Línea (Line Number de AutoCAD Plant 3D)"
+              title="Número de línea, como en Plant 3D"
             />
           </div>
 
@@ -417,7 +417,7 @@ export const TopNavigation: React.FC = () => {
               value={specCode}
               onChange={(e) => loadBuiltInSpec(e.target.value)}
               className="bg-transparent text-[11px] font-mono font-bold text-[#38bdf8] outline-none cursor-pointer leading-tight"
-              title="Seleccionar Especificación de AutoCAD Plant 3D"
+              title="Elegir la spec"
             >
               {specOptions.map((sp) => (
                 <option key={sp} value={sp} className="bg-[#161920] text-slate-100">
@@ -436,7 +436,7 @@ export const TopNavigation: React.FC = () => {
               value={nominalDiameter}
               onChange={(e) => setNominalDiameter(Number(e.target.value))}
               className="bg-transparent text-[11px] font-mono font-bold text-emerald-400 outline-none cursor-pointer leading-tight"
-              title="Seleccionar Diámetro Nominal (Size)"
+              title="Elegir el diámetro"
             >
               {availableDiameters.map((d) => (
                 <option key={d} value={d} className="bg-[#161920] text-slate-100">
@@ -457,7 +457,7 @@ export const TopNavigation: React.FC = () => {
                 ? 'bg-amber-500/20 text-amber-300 border-amber-400 hover:bg-amber-500/30 animate-pulse'
                 : 'bg-[#2b313d] text-slate-300 border-[#3e4656] hover:border-[#0696d7]'
             }`}
-            title="Desplegar o plegar la Paleta de Propiedades de la pieza seleccionada"
+            title="Mostrar u ocultar Propiedades de la pieza elegida"
           >
             <span>📋</span>
             <span>Propiedades</span>
@@ -470,7 +470,7 @@ export const TopNavigation: React.FC = () => {
             className="h-9 px-2 rounded bg-[#2b313d] border border-[#3e4656] hover:border-[#0696d7] text-[10px] font-mono font-bold text-slate-200 flex items-center space-x-1 transition-colors"
             title="Cargar spec de Plant 3D: elegí juntos la .pspc, su .pspx y el DefaultConnectorsConfig.xml del proyecto"
           >
-            <span>+SPEC</span>
+            <span>+ Spec</span>
           </button>
 
           {/* Botón Importar PCF desde la PC */}
@@ -478,10 +478,10 @@ export const TopNavigation: React.FC = () => {
             type="button"
             onClick={() => pcfInputRef.current?.click()}
             className="h-9 px-2 rounded bg-[#2b313d] border border-amber-500/60 hover:border-amber-400 text-[10px] font-mono font-bold text-amber-300 flex items-center space-x-1 transition-colors"
-            title="Abrir archivo Isométrico .PCF exportado desde AutoCAD Plant 3D o Achero Plant 3D"
+            title="Abrir un PCF exportado de Plant 3D o de esta app"
           >
             <span>📂</span>
-            <span>ABRIR PCF</span>
+            <span>Abrir PCF</span>
           </button>
 
           {/* Botón Exportar PCF directo de la línea trazada en la App */}
@@ -490,10 +490,10 @@ export const TopNavigation: React.FC = () => {
             onClick={handleQuickExportPcf}
             disabled={graph.components.size === 0}
             className="h-9 px-2.5 rounded bg-sky-600/25 border border-sky-400/70 hover:bg-sky-600/40 hover:border-sky-300 text-[10px] font-mono font-bold text-sky-200 flex items-center space-x-1 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-            title="Exportar y descargar archivo .PCF estándar Isogen / AutoCAD Plant 3D del modelo actual"
+            title="Exportar el modelo a PCF, para Plant 3D o Isogen"
           >
             <span>⬇</span>
-            <span>EXPORTAR PCF</span>
+            <span>Exportar PCF</span>
           </button>
 
           <div className="h-7 w-[1px] bg-[#343b48] mx-0.5" />
@@ -507,9 +507,9 @@ export const TopNavigation: React.FC = () => {
                 ? 'bg-[#0696d7] text-white border-[#38bdf8] shadow-md shadow-[#0696d7]/30'
                 : 'bg-[#2b313d] text-slate-200 border-[#3e4656] hover:bg-[#343b48]'
             }`}
-            title="En Route Pipe la cámara sigue automáticamente la boca activa"
+            title="Con Seguir boca la cámara va sola a la boca activa"
           >
-            <span>{cameraMode === 'ROUTE_MODE' ? 'Route Pipe' : 'Vista Libre'}</span>
+            <span>{cameraMode === 'ROUTE_MODE' ? 'Seguir boca' : 'Vista libre'}</span>
           </button>
         </div>
 
@@ -524,7 +524,7 @@ export const TopNavigation: React.FC = () => {
                 ? 'bg-[#2b313d] border-[#3e4656] text-slate-100 hover:border-[#0696d7] active:bg-slate-700'
                 : 'bg-[#161920] border-[#262b35] text-slate-600 cursor-not-allowed'
             }`}
-            title="Deshacer (UNDO)"
+            title="Deshacer"
           >
             ↩
           </button>
@@ -538,7 +538,7 @@ export const TopNavigation: React.FC = () => {
                 ? 'bg-[#2b313d] border-[#3e4656] text-slate-100 hover:border-[#0696d7] active:bg-slate-700'
                 : 'bg-[#161920] border-[#262b35] text-slate-600 cursor-not-allowed'
             }`}
-            title="Rehacer (REDO)"
+            title="Rehacer"
           >
             ↪
           </button>
@@ -547,7 +547,7 @@ export const TopNavigation: React.FC = () => {
             type="button"
             onClick={frameAll}
             className="px-2 h-9 rounded bg-[#2b313d] border border-[#3e4656] text-[10px] font-mono font-bold text-slate-200 hover:border-[#0696d7] flex items-center justify-center"
-            title="Zoom Extents (Encuadrar Modelo)"
+            title="Encuadrar el modelo"
           >
             EXT
           </button>
@@ -565,25 +565,25 @@ export const TopNavigation: React.FC = () => {
             type="button"
             onClick={toggleBom}
             className="h-9 px-2.5 rounded bg-emerald-600/20 border border-emerald-500/70 text-[11px] font-bold text-emerald-300 hover:bg-emerald-600/30 flex items-center space-x-1"
-            title="Ver Lista de Cortes de Niples (Nro, Largo mm, Extremos Plano/Bisel/Roscado) y BOM"
+            title="Lista de cortes de caños y lista de materiales"
           >
-            <span>Lista de Cortes</span>
+            <span>Cortes y materiales</span>
           </button>
 
           <button
             type="button"
             onClick={toggleExport}
             className="h-9 px-2.5 rounded bg-[#0696d7]/20 border border-[#0696d7] text-[11px] font-bold text-[#38bdf8] hover:bg-[#0696d7]/30 flex items-center space-x-1 shadow-sm"
-            title="Exportar Plano Isométrico 2D (.DXF) e Isogen (.PCF)"
+            title="Planos isométricos (PDF, DXF) y PCF"
           >
-            <span>Iso / DXF</span>
+            <span>Planos</span>
           </button>
 
           <button
             type="button"
             onClick={resetGraph}
             className="w-8 h-9 rounded bg-rose-950/40 border border-rose-800/50 text-rose-400 text-xs font-bold flex items-center justify-center hover:bg-rose-900/50"
-            title="Reiniciar Línea 3D"
+            title="Vaciar el modelo"
           >
             ↺
           </button>

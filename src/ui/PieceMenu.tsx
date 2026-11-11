@@ -7,20 +7,7 @@ import { sameSizeRun } from '../core/graph/resizeRun';
 import { useProjectStore } from '../store/useProjectStore';
 import { useUiConfigStore } from '../store/useUiConfigStore';
 import { usePhoneLayout, vibrate } from './useIsPhone';
-
-const TYPE_NAME: Record<string, string> = {
-  PIPE: 'Caño',
-  ELBOW: 'Codo',
-  TEE: 'Te',
-  FLANGE: 'Brida',
-  VALVE: 'Válvula',
-  REDUCER: 'Reducción',
-  CAP: 'Tapa',
-  OLET: 'Olet',
-  CROSS: 'Cruz',
-  COUPLING: 'Cupla',
-  INSTRUMENT: 'Instrumento'
-};
+import { pieceName } from '../core/pieceNames';
 
 const BRANCH_AXES: { label: string; v: [number, number, number]; cls: string }[] = [
   { label: '+X', v: [1, 0, 0], cls: 'text-red-400' },
@@ -156,7 +143,7 @@ export const PieceMenu: React.FC = () => {
       >
         <div className="px-3 py-2 border-b border-[#2b313d]">
           <div className="text-xs font-bold text-[#38bdf8]">
-            {TYPE_NAME[comp.type] ?? comp.type} {nd}&quot;
+            {pieceName(comp.type)} {nd}&quot;
           </div>
           {comp.parameters.description && <div className="text-[11px] text-slate-400 truncate">{comp.parameters.description}</div>}
         </div>
@@ -205,7 +192,7 @@ export const PieceMenu: React.FC = () => {
                   className="h-11 rounded-lg bg-[#212631] border border-[#343c4c] text-xs font-bold text-slate-100 active:bg-[#2b3240]"
                   onClick={run(() => store().splitSelectedPipeWithFitting(t, offset))}
                 >
-                  {TYPE_NAME[t]}
+                  {pieceName(t)}
                 </button>
               ))}
             </div>

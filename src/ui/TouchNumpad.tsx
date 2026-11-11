@@ -229,7 +229,7 @@ export const TouchNumpad: React.FC = () => {
   );
 
   const actionsRow = (
-    <div className="w-full flex items-center gap-1.5 overflow-x-auto no-scrollbar" style={{ touchAction: 'pan-x' }}>
+    <div data-tour="align-tools" className="w-full flex items-center gap-1.5 overflow-x-auto no-scrollbar" style={{ touchAction: 'pan-x' }}>
       <button
         type="button"
         onClick={() => {
@@ -576,7 +576,7 @@ export const TouchNumpad: React.FC = () => {
   return (
     <FloatingPalette
       paletteId="numpad"
-      title={phone ? 'Trazar' : 'Línea de Comando • Trazado'}
+      title="Trazar"
       icon={phone ? undefined : '⌨'}
       badge={
         <span className="px-1.5 py-0.5 rounded bg-sky-500/20 border border-sky-500/40 text-sky-300 font-mono font-bold text-[9px]">

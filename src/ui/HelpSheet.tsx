@@ -25,7 +25,9 @@ const TOUCH: HelpGroup[] = [
       ['Tocar el fondo', 'Suelta la pieza y la boca: el compás se apaga hasta que elijas otra boca.'],
       ['Flechas sobre la boca o fila X Y Z', 'Eligen hacia dónde va el caño. Si cambia de rumbo, el codo se pone solo.'],
       ['Arrastrar la manija del caño fantasma', 'Da el largo con el dedo. También se puede escribir y tocar Trazar.'],
-      ['Giro, Pend., Desvío y Elev.', 'Ángulos libres, pendiente, corrimientos y llegar a una elevación.']
+      ['Giro, Pend., Desvío y Elev.', 'Ángulos libres, pendiente, corrimientos y llegar a una elevación.'],
+      ['Alinear', 'Tocá otra boca o pieza y el largo del tramo se calcula solo hasta quedar alineado con ella.'],
+      ['Boca', 'Muestra las coordenadas y la elevación de la boca activa, de eje y de fondo de caño. Escribiendo X, Y y Z la línea va hasta ese punto.']
     ]
   },
   {
@@ -40,10 +42,21 @@ const TOUCH: HelpGroup[] = [
     title: 'Corregir',
     rows: [
       ['Tocar una pieza', 'La elige. Sus datos están en Propiedades.'],
-      ['Mantener apretada una pieza', 'Abre su menú: partir, derivar, soporte, sustituir, nota de campo, aislar, borrar.'],
+      ['Mantener apretada una pieza', 'Abre su menú: partir, derivar, girar o dar vuelta, soporte, sustituir, nota de campo, aislar, borrar.'],
+      ['Dar vuelta o girar (en el menú)', 'Da vuelta una brida o el sentido de una válvula, pasa una reducción excéntrica de plano abajo a plano arriba y gira el volante.'],
+      ['Purga o venteo (en Derivación)', 'Arma de un toque la derivación con su niple, válvula y tapa: la purga hacia abajo, el venteo hacia arriba.'],
+      ['Cambiar diámetro del tramo (en el menú)', 'Cambia caños y accesorios del tramo por los de otro diámetro de la spec, sin mover los ejes.'],
       ['Arrastrar la punta de un caño', 'Lo alarga o lo acorta.'],
       ['Seleccionar varias (en el menú)', 'Para mover, copiar o borrar un grupo de piezas.'],
       ['Flechas de arriba', 'Deshacer y rehacer.']
+    ]
+  },
+  {
+    title: 'Ver y ubicarse',
+    rows: [
+      ['Etiquetas (en Vistas)', 'Dibuja sobre el modelo el largo de cada caño, las elevaciones y el número de línea.'],
+      ['Tocar una cota', 'Con las etiquetas a la vista, abre el largo de ese caño para escribir el nuevo.'],
+      ['Ref. DXF (en Vistas)', 'Carga un DXF de ejes y columnas como fondo para ubicar la cañería. Un DWG hay que guardarlo antes como DXF.']
     ]
   }
 ];
@@ -65,7 +78,9 @@ const MOUSE: HelpGroup[] = [
       ['Clic en el fondo', 'Suelta la pieza y la boca: el compás se apaga hasta que elijas otra boca.'],
       ['Flechas sobre la boca o fila X Y Z', 'Eligen hacia dónde va el caño. Si cambia de rumbo, el codo se pone solo.'],
       ['Largo y Enter', 'Traza el tramo. También se puede arrastrar la manija del caño fantasma.'],
-      ['Giro, Pend., Desvío y Elev.', 'Ángulos libres, pendiente, corrimientos y llegar a una elevación.']
+      ['Giro, Pend., Desvío y Elev.', 'Ángulos libres, pendiente, corrimientos y llegar a una elevación.'],
+      ['Alinear', 'Tocá otra boca o pieza y el largo del tramo se calcula solo hasta quedar alineado con ella.'],
+      ['Boca', 'Muestra las coordenadas y la elevación de la boca activa, de eje y de fondo de caño. Escribiendo X, Y y Z la línea va hasta ese punto.']
     ]
   },
   {
@@ -80,8 +95,19 @@ const MOUSE: HelpGroup[] = [
     title: 'Corregir',
     rows: [
       ['Clic en una pieza', 'La elige y muestra sus propiedades.'],
-      ['Clic derecho en una pieza', 'Abre su menú: partir, derivar, soporte, sustituir, nota de campo, aislar, borrar.'],
+      ['Clic derecho en una pieza', 'Abre su menú: partir, derivar, girar o dar vuelta, soporte, sustituir, nota de campo, aislar, borrar.'],
+      ['Dar vuelta o girar (en el menú)', 'Da vuelta una brida o el sentido de una válvula, pasa una reducción excéntrica de plano abajo a plano arriba y gira el volante.'],
+      ['Purga o venteo (en Derivación)', 'Arma de un toque la derivación con su niple, válvula y tapa: la purga hacia abajo, el venteo hacia arriba.'],
+      ['Cambiar diámetro del tramo (en el menú)', 'Cambia caños y accesorios del tramo por los de otro diámetro de la spec, sin mover los ejes.'],
       ['Arrastrar la punta de un caño', 'Lo alarga o lo acorta.']
+    ]
+  },
+  {
+    title: 'Ver y ubicarse',
+    rows: [
+      ['Etiquetas (en Vistas)', 'Dibuja sobre el modelo el largo de cada caño, las elevaciones y el número de línea.'],
+      ['Clic en una cota', 'Con las etiquetas a la vista, abre el largo de ese caño para escribir el nuevo.'],
+      ['Ref. DXF (en Vistas)', 'Carga un DXF de ejes y columnas como fondo para ubicar la cañería. Un DWG hay que guardarlo antes como DXF.']
     ]
   }
 ];
@@ -168,7 +194,7 @@ export const HelpSheet: React.FC = () => {
           ))}
 
           <p className="text-[11px] text-slate-400 leading-snug">
-            El botón de al lado del signo de pregunta revisa el modelo: choques, uniones mal armadas y niples cortos. Conviene mirarlo antes de
+            El botón de al lado del signo de pregunta revisa el modelo: choques, uniones mal armadas y caños demasiado cortos. Conviene mirarlo antes de
             exportar el PCF.
           </p>
         </div>

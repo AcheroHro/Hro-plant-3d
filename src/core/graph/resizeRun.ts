@@ -5,23 +5,11 @@ import { Component, Port, SpecFitting } from '../../types/piping';
 import { calculateElbowPlacement } from '../math/elbowSolver';
 import { trimmedTakeOff } from '../routing/routeMath';
 import { valveKindFrom } from '../specs/valveKind';
+import { pieceNameLower } from '../pieceNames';
 
 const same = (a: number, b: number) => Math.abs(a - b) < 1e-6;
 
-const NAMES: Record<string, string> = {
-  PIPE: 'caño',
-  ELBOW: 'codo',
-  TEE: 'te',
-  FLANGE: 'brida',
-  VALVE: 'válvula',
-  REDUCER: 'reducción',
-  CAP: 'tapa',
-  OLET: 'olet',
-  COUPLING: 'cupla',
-  CROSS: 'cruz',
-  INSTRUMENT: 'instrumento'
-};
-const nameOf = (comp: Component) => NAMES[comp.type] ?? comp.type.toLowerCase();
+const nameOf = (comp: Component) => pieceNameLower(comp.type);
 
 /** Diámetro que identifica el tramo de una pieza */
 function runSizeOf(comp: Component): number {

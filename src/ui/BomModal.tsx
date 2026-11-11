@@ -27,10 +27,10 @@ export const BomModal: React.FC = () => {
 
   const handleExportCsv = () => {
     const headers = [
-      'Identificacion (Nro Niple)',
+      'Nro de cano',
       'Linea',
       'Diametro Nominal (in)',
-      'Largo del Niple (mm)',
+      'Largo (mm)',
       'Extremo 1',
       'Extremo 2',
       'Schedule'
@@ -51,14 +51,14 @@ export const BomModal: React.FC = () => {
 
   const handleShareOrCopyCutList = async () => {
     const lines = [
-      `LISTA DE CORTES DE NIPLES — LÍNEA: ${lineNumber} (Spec ${specCode})`,
+      `LISTA DE CORTES — LÍNEA: ${lineNumber} (Spec ${specCode})`,
       '------------------------------------------------------------',
       ...cutList.map(
         (c) =>
           `${c.nippleId} | ND ${c.nominalDiameter}" | Largo: ${Math.round(c.cutLengthMm)} mm | Ext.1: ${c.endFinish1} | Ext.2: ${c.endFinish2}`
       ),
       '------------------------------------------------------------',
-      `Total Niples: ${cutList.length} (${totalPipesLengthM.toFixed(2)} m lineales)`
+      `Total de caños: ${cutList.length} (${totalPipesLengthM.toFixed(2)} m lineales)`
     ];
     const text = lines.join('\n');
 
@@ -96,11 +96,11 @@ export const BomModal: React.FC = () => {
       case 'REDUCER':
         return { label: 'REDUCCIÓN', cls: 'bg-indigo-500/20 text-indigo-300 border-indigo-500/40' };
       case 'CAP':
-        return { label: 'CASQUETE', cls: 'bg-slate-500/20 text-slate-300 border-slate-500/40' };
+        return { label: 'TAPA', cls: 'bg-slate-500/20 text-slate-300 border-slate-500/40' };
       case 'GASKET':
         return { label: 'JUNTA', cls: 'bg-yellow-500/20 text-yellow-300 border-yellow-500/50' };
       case 'BOLT_SET':
-        return { label: 'ESPÁRRAGOS', cls: 'bg-orange-500/20 text-orange-300 border-orange-500/50' };
+        return { label: 'BULONES', cls: 'bg-orange-500/20 text-orange-300 border-orange-500/50' };
       default:
         return { label: type, cls: 'bg-slate-700 text-slate-200 border-slate-600' };
     }
@@ -117,7 +117,7 @@ export const BomModal: React.FC = () => {
             </span>
             <div className="flex flex-col">
               <span className="font-bold text-sm text-slate-100">
-                Lista de Cortes de Niples y Cómputo de Materiales
+                Lista de cortes y materiales
               </span>
               <span className="text-[11px] text-slate-400 font-mono">
                 Línea: <strong className="text-amber-300">{lineNumber}</strong> • Spec:{' '}
@@ -146,7 +146,7 @@ export const BomModal: React.FC = () => {
                 : 'bg-transparent text-slate-400 border-transparent hover:text-slate-200'
             }`}
           >
-            Lista de Cortes de Niples ({cutList.length})
+            Lista de cortes ({cutList.length})
           </button>
           <button
             type="button"
@@ -166,19 +166,19 @@ export const BomModal: React.FC = () => {
           {activeTab === 'CUT_LIST' ? (
             cutList.length === 0 ? (
               <div className="py-12 text-center text-slate-400 text-xs">
-                No hay tramos de cañería (niples) en el modelo actual.
+                Todavía no hay caños en el modelo.
               </div>
             ) : (
               <div className="border border-[#343b48] rounded-lg overflow-x-auto">
                 <table className="w-full text-left text-xs">
                   <thead className="bg-[#232832] text-slate-300 border-b border-[#343b48] font-mono text-[11px]">
                     <tr>
-                      <th className="p-2.5">Identificación (N.º Niple)</th>
+                      <th className="p-2.5">N.º de caño</th>
                       <th className="p-2.5 text-center">ND</th>
-                      <th className="p-2.5 text-right">Largo del Niple (mm)</th>
+                      <th className="p-2.5 text-right">Largo (mm)</th>
                       <th className="p-2.5 text-center">Extremo 1</th>
                       <th className="p-2.5 text-center">Extremo 2</th>
-                      <th className="p-2.5 text-center">Acción 3D</th>
+                      <th className="p-2.5 text-center">Ver</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-[#2a303c] text-slate-200 font-mono">
@@ -247,7 +247,7 @@ export const BomModal: React.FC = () => {
             )
           ) : bom.length === 0 ? (
             <div className="py-12 text-center text-slate-400 text-xs">
-              No hay cañerías ni accesorios en el modelo 3D actual.
+              Todavía no hay piezas en el modelo.
             </div>
           ) : (
             <div className="border border-[#343b48] rounded-lg overflow-x-auto">
@@ -255,10 +255,10 @@ export const BomModal: React.FC = () => {
                 <thead className="bg-[#232832] text-slate-300 border-b border-[#343b48] font-mono text-[11px]">
                   <tr>
                     <th className="p-2.5">Categoría</th>
-                    <th className="p-2.5">Descripción de Catálogo (.pspc)</th>
+                    <th className="p-2.5">Descripción de la spec</th>
                     <th className="p-2.5 text-center">ND</th>
                     <th className="p-2.5 text-center">Cant.</th>
-                    <th className="p-2.5 text-right">Corte Total</th>
+                    <th className="p-2.5 text-right">Largo total</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#2a303c] text-slate-200">

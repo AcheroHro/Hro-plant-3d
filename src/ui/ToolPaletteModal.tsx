@@ -10,7 +10,7 @@ import { PieceGrid } from './PieceGrid';
 import { PieceIcon } from './icons/PieceIcons';
 
 const CONFIDENCE_BADGE: Record<string, { label: string; cls: string; title: string }> = {
-  verified: { label: '✓', cls: 'text-emerald-400', title: 'Ubicación de puertos verificada contra Plant 3D' },
+  verified: { label: '✓', cls: 'text-emerald-400', title: 'Ubicación de las bocas verificada contra Plant 3D' },
   standard: { label: '≈', cls: 'text-sky-300', title: 'Según norma; todavía no verificada importando en Plant 3D' },
   approximate: { label: '!', cls: 'text-amber-400', title: 'Geometría aproximada: revisar al importar en Plant 3D' }
 };
@@ -285,7 +285,7 @@ export const ToolPaletteModal: React.FC = () => {
             />
 
             <PartSection
-              title="Tee"
+              title="Te"
               icon="teeRun"
               category="TEE"
               spec={data.tee}
