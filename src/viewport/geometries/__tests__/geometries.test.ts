@@ -70,6 +70,41 @@ describe('Geometrías Paramétricas Procedurales Three.js', () => {
     geom.dispose();
   });
 
+  it('La reducción respeta el orden de los extremos: sirve para reducir y para ampliar', () => {
+    const radiusAt = (geom: ReturnType<typeof createReducerGeometry>, z: number) => {
+      const pos = geom.getAttribute('position');
+      let r = 0;
+      for (let i = 0; i < pos.count; i++) if (Math.abs(pos.getZ(i) - z) < 0.01) r = Math.max(r, Math.hypot(pos.getX(i), pos.getY(i)));
+      return r;
+    };
+    const reduce = createReducerGeometry(114.3, 60.3, 6, 102);
+    expect(radiusAt(reduce, 0)).toBeCloseTo(57.15, 1);
+    expect(radiusAt(reduce, 102)).toBeCloseTo(30.15, 1);
+    const enlarge = createReducerGeometry(60.3, 114.3, 6, 102);
+    expect(radiusAt(enlarge, 0)).toBeCloseTo(30.15, 1);
+    expect(radiusAt(enlarge, 102)).toBeCloseTo(57.15, 1);
+  });
+
+  it('La reducción excéntrica tiene una generatriz recta y el eje chico corrido', () => {
+    const offset = (114.3 - 60.3) / 2;
+    const geom = createReducerGeometry(114.3, 60.3, 6, 102, 32, offset);
+    const pos = geom.getAttribute('position');
+    let maxX0 = -Infinity;
+    let maxXL = -Infinity;
+    let minXL = Infinity;
+    for (let i = 0; i < pos.count; i++) {
+      if (Math.abs(pos.getZ(i)) < 0.01) maxX0 = Math.max(maxX0, pos.getX(i));
+      if (Math.abs(pos.getZ(i) - 102) < 0.01) {
+        maxXL = Math.max(maxXL, pos.getX(i));
+        minXL = Math.min(minXL, pos.getX(i));
+      }
+    }
+    // Del lado del corrimiento los dos extremos quedan a la misma altura (lado plano)
+    expect(maxXL).toBeCloseTo(maxX0, 1);
+    // El centro de salida está corrido
+    expect((maxXL + minXL) / 2).toBeCloseTo(offset, 1);
+  });
+
   it('Debe generar la geometría de una válvula con volante (createValveGeometry)', async () => {
     const { createValveGeometry } = await import('../valveGeometry');
     const geom = createValveGeometry(60.3, 3.91, 178);

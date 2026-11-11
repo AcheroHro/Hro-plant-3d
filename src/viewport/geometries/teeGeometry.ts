@@ -10,13 +10,19 @@ import { createPipeGeometry } from './pipeGeometry';
  * @param wallThickness Espesor de pared en mm
  * @param runTakeOff Cota centro a cara de recorrido principal (C) en mm
  * @param branchTakeOff Cota centro a cara de derivación (M) en mm
+ * @param branchOuterDiameter Diámetro exterior del ramal si es una te reducida
  */
 export function createTeeGeometry(
   outerDiameter: number,
   wallThickness: number,
   runTakeOff: number,
-  branchTakeOff: number
+  branchTakeOff: number,
+  branchOuterDiameter?: number
 ): THREE.BufferGeometry {
+  // Te reducida: el ramal lleva su propio diámetro
+  const branchOD = branchOuterDiameter && branchOuterDiameter > 0 ? Math.min(branchOuterDiameter, outerDiameter) : outerDiameter;
+  const rBranch = Math.max(2, branchOD / 2);
+  const branchWall = Math.min(wallThickness, rBranch * 0.6);
   const rOut = Math.max(2, outerDiameter / 2);
   const totalRun = Math.max(20, runTakeOff * 2);
   const safeBranch = Math.max(10, branchTakeOff);
@@ -26,7 +32,7 @@ export function createTeeGeometry(
   geomRun.translate(0, 0, -runTakeOff);
 
   // 2. Derivación (Branch) a lo largo del eje +Y desde 0 hasta +branchTakeOff
-  const geomBranch = createPipeGeometry(outerDiameter, wallThickness, safeBranch, 28);
+  const geomBranch = createPipeGeometry(branchOD, branchWall, safeBranch, 28);
   geomBranch.rotateX(-Math.PI / 2);
 
   // 3. Cuerpo forjado central de intersección (crotch ASME B16.9) para unión sólida
@@ -41,7 +47,7 @@ export function createTeeGeometry(
   collarRun2.rotateX(Math.PI / 2);
   collarRun2.translate(0, 0, runTakeOff);
 
-  const collarBranch = new THREE.CylinderGeometry(rOut * 1.04, rOut * 1.04, Math.min(8, safeBranch * 0.15), 24);
+  const collarBranch = new THREE.CylinderGeometry(rBranch * 1.04, rBranch * 1.04, Math.min(8, safeBranch * 0.15), 24);
   collarBranch.translate(0, safeBranch, 0);
 
   const parts = [geomRun, geomBranch, geomHub, collarRun1, collarRun2, collarBranch];

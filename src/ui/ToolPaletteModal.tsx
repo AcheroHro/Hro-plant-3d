@@ -5,6 +5,9 @@ import { ComponentType, SpecFitting } from '../types/piping';
 import { PartCategory } from '../core/specs/catalogTypes';
 import { FamilyOption } from '../core/specs/SpecCatalog';
 import { formatNominal } from '../core/specs/units';
+import { PieceIconKind } from '../core/specs/paletteItems';
+import { PieceGrid } from './PieceGrid';
+import { PieceIcon } from './icons/PieceIcons';
 
 const CONFIDENCE_BADGE: Record<string, { label: string; cls: string; title: string }> = {
   verified: { label: '✓', cls: 'text-emerald-400', title: 'Ubicación de puertos verificada contra Plant 3D' },
@@ -14,7 +17,7 @@ const CONFIDENCE_BADGE: Record<string, { label: string; cls: string; title: stri
 
 interface SectionProps {
   title: string;
-  icon: string;
+  icon: PieceIconKind;
   category: PartCategory;
   spec: SpecFitting | null | undefined;
   families: FamilyOption[];
@@ -32,8 +35,8 @@ const PartSection: React.FC<SectionProps> = ({ title, icon, spec, families, pref
     <div className="p-3 bg-[#252830] rounded-lg border border-[#3a3f4d] space-y-2">
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-start gap-2.5 min-w-0">
-          <div className="w-10 h-10 rounded-lg bg-[#181a20] border border-[#3a3f4d] flex items-center justify-center text-xl shrink-0">
-            {icon}
+          <div className="w-11 h-10 rounded-lg bg-[#181a20] border border-[#3a3f4d] flex items-center justify-center shrink-0">
+            <PieceIcon kind={icon} className="w-9 h-7" />
           </div>
           <div className="min-w-0">
             <h3 className="text-sm font-bold text-white">{title}</h3>
@@ -193,7 +196,7 @@ export const ToolPaletteModal: React.FC = () => {
       <div className="w-full sm:max-w-xl max-h-[88vh] bg-[#1e2128] border-t sm:border border-[#3a3f4d] sm:rounded-xl rounded-t-2xl shadow-2xl flex flex-col overflow-hidden text-slate-100">
         <div className="flex items-center justify-between px-4 py-3 border-b border-[#3a3f4d] bg-[#252830]">
           <div>
-            <h2 className="text-sm font-bold text-white">Paleta de piezas • {specCode}</h2>
+            <h2 className="text-sm font-bold text-white">Catálogo de la spec • {specCode}</h2>
             <p className="text-[11px] text-slate-400">
               {specReader?.isNativePlant3D ? 'Spec de Plant 3D' : 'Catálogo demo (no es una spec de Plant)'}
               {data?.hasPriorities ? ' • con prioridades del .pspx' : specReader?.isNativePlant3D ? ' • sin .pspx: elige por extremos' : ''}
@@ -213,7 +216,7 @@ export const ToolPaletteModal: React.FC = () => {
         </div>
 
         <div className="px-4 py-2 bg-[#181a20] border-b border-[#3a3f4d] flex items-center gap-2 overflow-x-auto no-scrollbar">
-          <span className="text-xs text-slate-400 font-semibold uppercase shrink-0">Size:</span>
+          <span className="text-xs text-slate-400 font-semibold uppercase shrink-0">Diámetro:</span>
           {(data?.sizes ?? []).map((d) => (
             <button
               key={d}
@@ -232,9 +235,15 @@ export const ToolPaletteModal: React.FC = () => {
 
         {data && (
           <div className="flex-1 overflow-y-auto p-3 space-y-2.5 no-scrollbar">
+            <div className="p-3 bg-[#252830] rounded-lg border border-[#3a3f4d]">
+              <PieceGrid variant="sheet" onInserted={toggleToolPalette} showRecents={false} />
+            </div>
+            <h3 className="pt-1 text-[10px] uppercase tracking-wide font-bold text-slate-400">
+              Familia que se usa en cada tipo (queda fijada para la spec)
+            </h3>
             <PartSection
               title="Caño"
-              icon="🚰"
+              icon="pipe"
               category="PIPE"
               spec={data.pipe}
               families={data.families.PIPE}
@@ -250,7 +259,7 @@ export const ToolPaletteModal: React.FC = () => {
 
             <PartSection
               title="Codo"
-              icon="↩️"
+              icon="elbow90"
               category="ELBOW"
               spec={data.elbow90 ?? data.elbow45}
               families={data.families.ELBOW}
@@ -277,7 +286,7 @@ export const ToolPaletteModal: React.FC = () => {
 
             <PartSection
               title="Tee"
-              icon="🔀"
+              icon="teeRun"
               category="TEE"
               spec={data.tee}
               families={data.families.TEE}
@@ -323,7 +332,7 @@ export const ToolPaletteModal: React.FC = () => {
 
             <PartSection
               title="Brida"
-              icon="⭕"
+              icon="flangeWN"
               category="FLANGE"
               spec={data.flange}
               families={data.families.FLANGE}
@@ -339,7 +348,7 @@ export const ToolPaletteModal: React.FC = () => {
 
             <PartSection
               title="Válvula"
-              icon="🛑"
+              icon="valveGate"
               category="VALVE"
               spec={data.valve}
               families={data.families.VALVE}
@@ -358,7 +367,7 @@ export const ToolPaletteModal: React.FC = () => {
 
             <PartSection
               title="Reducción"
-              icon="🔻"
+              icon="reducerConcentric"
               category="REDUCER"
               spec={reducerSpec}
               families={data.families.REDUCER}
@@ -395,7 +404,7 @@ export const ToolPaletteModal: React.FC = () => {
 
             <PartSection
               title="Tapa"
-              icon="⏹️"
+              icon="cap"
               category="CAP"
               spec={data.cap}
               families={data.families.CAP}

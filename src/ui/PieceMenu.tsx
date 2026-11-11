@@ -1,8 +1,9 @@
 import React, { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
-import { Anchor, ClipboardList, Eye, CopyPlus, GitBranch, MessageSquarePlus, Replace, RotateCw, Scissors, Trash2, Waypoints } from 'lucide-react';
+import { Anchor, ArrowLeftRight, ClipboardList, Diameter, Eye, CopyPlus, GitBranch, MessageSquarePlus, Replace, RotateCw, Scissors, Trash2, Waypoints } from 'lucide-react';
 import type { SupportKind } from '../types/piping';
 import { usePipingStore } from '../store/usePipingStore';
+import { sameSizeRun } from '../core/graph/resizeRun';
 import { useProjectStore } from '../store/useProjectStore';
 import { useUiConfigStore } from '../store/useUiConfigStore';
 import { usePhoneLayout, vibrate } from './useIsPhone';
@@ -55,7 +56,8 @@ export const PieceMenu: React.FC = () => {
   const boxRef = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
   const [showSubstitute, setShowSubstitute] = useState(false);
-  const [section, setSection] = useState<'branch' | 'support' | null>(null);
+  const [section, setSection] = useState<'branch' | 'support' | 'size' | null>(null);
+  const [runNd, setRunNd] = useState<number | null>(null);
   const [branchNd, setBranchNd] = useState<number | null>(null);
 
   const comp = menu ? graph.components.get(menu.componentId) : undefined;
@@ -65,6 +67,7 @@ export const PieceMenu: React.FC = () => {
     setShowSubstitute(false);
     setSection(null);
     setBranchNd(null);
+    setRunNd(null);
     if (!menu || !boxRef.current) return setPos(null);
     const { offsetWidth: w, offsetHeight: h } = boxRef.current;
     setPos({
@@ -122,11 +125,16 @@ export const PieceMenu: React.FC = () => {
   const branchSize = branchNd ?? branchSizes.filter((n) => n < nd).pop() ?? branchSizes[branchSizes.length - 1];
   const branchAxes = pipeAxis ? BRANCH_AXES.filter((a) => Math.abs(new THREE.Vector3(...a.v).dot(pipeAxis)) < 0.5) : [];
   const nearSupport = isPipe && pressPoint ? graph.supportNear(comp.id, pressPoint) : null;
-  const toggleSection = (name: 'branch' | 'support') => () => {
+  const toggleSection = (name: 'branch' | 'support' | 'size') => () => {
     vibrate();
     setSection(section === name ? null : name);
   };
   const cell = 'h-11 rounded-lg bg-[#212631] border border-[#343c4c] text-xs font-bold active:bg-[#2b3240]';
+  const flipKind = graph.flipKind(comp.id);
+  // Cambiar el diámetro de todo el tramo del mismo diámetro
+  const sizeRun = section === 'size' ? sameSizeRun(graph, comp.id) : null;
+  const runSizes = sizeRun && specReader ? specReader.getAvailableNominalDiameters().filter((n) => Math.abs(n - sizeRun.nd) > 1e-6) : [];
+  const runTarget = runNd ?? runSizes.find((n) => sizeRun && n > sizeRun.nd) ?? runSizes[runSizes.length - 1];
 
   const openProperties = () => {
     const ui = useUiConfigStore.getState();
@@ -162,6 +170,24 @@ export const PieceMenu: React.FC = () => {
           <button type="button" role="menuitem" className={item} onClick={run(() => store().rotateSelectedComponent(90))}>
             <RotateCw size={18} className="text-amber-300 shrink-0" />
             Girar 90°
+          </button>
+        )}
+
+        {comp.type === 'VALVE' && comp.parameters.visual?.actuator !== 'none' && (
+          <button type="button" role="menuitem" className={item} onClick={run(() => store().rotateSelectedComponent(90))}>
+            <RotateCw size={18} className="text-amber-300 shrink-0" />
+            Girar el volante 90°
+          </button>
+        )}
+
+        {flipKind && (
+          <button type="button" role="menuitem" className={item} onClick={run(() => store().flipSelectedComponent())}>
+            <ArrowLeftRight size={18} className="text-amber-300 shrink-0" />
+            {flipKind === 'flange'
+              ? 'Dar vuelta la brida'
+              : flipKind === 'valve'
+                ? 'Invertir el sentido'
+                : `Pasar a plano ${graph.reducerFlatSide(comp.id) === 'abajo' ? 'arriba' : 'abajo'}`}
           </button>
         )}
 
@@ -210,6 +236,19 @@ export const PieceMenu: React.FC = () => {
                     ))}
                   </select>
                 </label>
+                <div className="grid grid-cols-2 gap-1.5">
+                  {(['purga', 'venteo'] as const).map((kind) => (
+                    <button
+                      key={kind}
+                      type="button"
+                      className={`${cell} text-emerald-200`}
+                      title="Derivación chica con niple, válvula y tapa, armada de un toque"
+                      onClick={run(() => store().addDrainOrVent(comp.id, menu.offsetMm ?? 0, kind))}
+                    >
+                      {kind === 'purga' ? 'Purga ↓ armada' : 'Venteo ↑ armado'}
+                    </button>
+                  ))}
+                </div>
                 <div className="text-[11px] text-slate-400">Sale a {offset} mm del inicio, hacia:</div>
                 <div className="grid grid-cols-4 gap-1.5">
                   {branchAxes.map((a) => (
@@ -288,6 +327,46 @@ export const PieceMenu: React.FC = () => {
                     {opt.label}
                   </button>
                 ))}
+              </div>
+            )}
+          </>
+        )}
+
+        {specReader && comp.type !== 'CROSS' && comp.type !== 'INSTRUMENT' && (
+          <>
+            <button type="button" role="menuitem" aria-expanded={section === 'size'} className={item} onClick={toggleSection('size')}>
+              <Diameter size={18} className="text-sky-300 shrink-0" />
+              <span className="flex-1">Cambiar diámetro del tramo</span>
+              <span className="text-slate-500">{section === 'size' ? '▴' : '▾'}</span>
+            </button>
+            {section === 'size' && sizeRun && (
+              <div className="px-3 py-2 bg-[#111419] border-y border-[#2b313d] space-y-1.5">
+                <div className="text-[11px] text-slate-400">
+                  {sizeRun.ids.length} pieza{sizeRun.ids.length > 1 ? 's' : ''} seguida{sizeRun.ids.length > 1 ? 's' : ''} de {sizeRun.nd}&quot;. Los ejes no se mueven: los caños
+                  absorben la diferencia.
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <select
+                    value={runTarget}
+                    onChange={(e) => setRunNd(parseFloat(e.target.value))}
+                    className="h-11 flex-1 min-w-0 px-2 rounded-lg bg-[#1b1f26] border border-[#343c4c] text-sm font-mono font-bold text-sky-300"
+                    aria-label="Diámetro nuevo del tramo"
+                  >
+                    {runSizes.map((n) => (
+                      <option key={n} value={n}>
+                        {n}&quot;
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    className={`${cell} px-3 !bg-sky-600 !border-sky-300 text-white`}
+                    disabled={runTarget === undefined}
+                    onClick={run(() => runTarget !== undefined && store().changeRunDiameter(runTarget))}
+                  >
+                    Cambiar
+                  </button>
+                </div>
               </div>
             )}
           </>

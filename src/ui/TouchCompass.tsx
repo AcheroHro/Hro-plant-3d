@@ -1,6 +1,8 @@
 import React from 'react';
 import * as THREE from 'three';
-import { Box, Maximize, Ruler } from 'lucide-react';
+import { Box, Map as MapIcon, Maximize, Ruler, Tags } from 'lucide-react';
+import { useUiConfigStore } from '../store/useUiConfigStore';
+import { useReferenceStore } from '../store/useReferenceStore';
 import { usePipingStore, lineOf } from '../store/usePipingStore';
 import { FloatingPalette } from './FloatingPalette';
 
@@ -15,6 +17,10 @@ export const TouchCompass: React.FC = () => {
   const measurePoints = usePipingStore((s) => s.measurePoints);
   const sectionBox = usePipingStore((s) => s.sectionBox);
   const store = usePipingStore.getState;
+  const showLabels = useUiConfigStore((s) => s.showLabels);
+  const reference = useReferenceStore((s) => s.reference);
+  const referenceNote = useReferenceStore((s) => s.note);
+  const fileRef = React.useRef<HTMLInputElement>(null);
 
   // Líneas presentes en el modelo, para aislar una
   const lines = Array.from(new Set(Array.from(graph.components.values(), (c) => lineOf(graph, c)).filter(Boolean))).sort();
@@ -96,6 +102,68 @@ export const TouchCompass: React.FC = () => {
             Corte
           </button>
         </div>
+
+        <div className="flex gap-1 w-full">
+          <button
+            type="button"
+            className={toggle(showLabels)}
+            aria-pressed={showLabels}
+            onClick={() => useUiConfigStore.getState().toggleLabels()}
+            title="Cotas de los caños, elevaciones y número de línea sobre el modelo"
+          >
+            <Tags size={14} />
+            Etiquetas
+          </button>
+          <button
+            type="button"
+            className={toggle(!!reference?.visible)}
+            aria-pressed={!!reference?.visible}
+            onClick={() => (reference ? useReferenceStore.getState().setVisible(!reference.visible) : fileRef.current?.click())}
+            title="Referencia de obra: un DXF de ejes y columnas dibujado de fondo"
+          >
+            <MapIcon size={14} />
+            {reference ? 'Referencia' : 'Ref. DXF'}
+          </button>
+        </div>
+        <input
+          ref={fileRef}
+          type="file"
+          accept=".dxf,.dwg"
+          className="hidden"
+          aria-label="Archivo DXF de referencia"
+          onChange={async (e) => {
+            const file = e.target.files?.[0];
+            e.target.value = '';
+            if (!file) return;
+            useReferenceStore.getState().importDxf(await file.text(), file.name);
+            // Con el modelo vacío se encuadra la referencia recién cargada
+            if (store().graph.components.size === 0) store().frameAll();
+          }}
+        />
+        {reference && (
+          <div className="flex gap-1 items-stretch w-full" data-reference-row>
+            <select
+              value={String(reference.scale)}
+              onChange={(e) => useReferenceStore.getState().setScale(parseFloat(e.target.value))}
+              className="flex-1 min-w-0 min-h-[32px] px-1 rounded border bg-[#1b1f26] border-[#3a4150] text-[10px] font-mono font-bold text-slate-200"
+              aria-label="Unidad del dibujo de referencia"
+              title={reference.name}
+            >
+              {[1, 10, 25.4, 304.8, 1000].map((s) => (
+                <option key={s} value={String(s)}>
+                  {s === 1 ? 'en mm' : s === 10 ? 'en cm' : s === 1000 ? 'en m' : s === 25.4 ? 'en pulgadas' : 'en pies'}
+                </option>
+              ))}
+            </select>
+            <button type="button" className={`${small} px-1`} onClick={() => fileRef.current?.click()} title="Cargar otro DXF">
+              Otro
+            </button>
+            <button type="button" className={`${small} px-1 !text-rose-300`} onClick={() => useReferenceStore.getState().clear()} title="Quitar la referencia del proyecto">
+              Quitar
+            </button>
+          </div>
+        )}
+        {referenceNote && <div className="text-[10px] leading-snug text-slate-300" data-reference-note>{referenceNote}</div>}
 
         {measureActive && (
           <div className="text-[10px] leading-snug text-fuchsia-200">

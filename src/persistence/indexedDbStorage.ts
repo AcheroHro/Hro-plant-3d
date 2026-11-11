@@ -27,6 +27,16 @@ export interface FieldNote {
   photoIds: string[];
 }
 
+/** Referencia de obra: líneas de un DXF dibujadas de fondo */
+export interface ReferenceRecord {
+  name: string;
+  /** Segmentos en unidades del dibujo: x1, y1, z1, x2, y2, z2, ... */
+  segments: number[];
+  /** Milímetros por unidad del dibujo */
+  scale: number;
+  visible: boolean;
+}
+
 export interface ProjectRecord {
   id: string;
   name: string;
@@ -40,6 +50,7 @@ export interface ProjectRecord {
   baseline: SerializedGraphState | null;
   baselineAt?: number;
   notes: FieldNote[];
+  reference?: ReferenceRecord;
 }
 
 export interface ProjectMeta {
@@ -375,7 +386,7 @@ export async function importProjectBundle(text: string): Promise<ProjectRecord> 
     idMap.set(ph.id, await savePhoto(rec.id, new Blob([bytes], { type: ph.type || 'image/jpeg' }), ph.width, ph.height));
   }
   const notes = src.notes.map((n) => ({ ...n, photoIds: n.photoIds.map((p) => idMap.get(p)).filter((p): p is string => Boolean(p)) }));
-  return (await updateProject(rec.id, { notes, baselineAt: src.baselineAt, createdAt: src.createdAt })) ?? rec;
+  return (await updateProject(rec.id, { notes, baselineAt: src.baselineAt, createdAt: src.createdAt, reference: src.reference })) ?? rec;
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -1,22 +1,19 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { usePipingStore, isolatedIds } from '../store/usePipingStore';
 import { ViewCube } from './ViewCube';
 import { usePhoneLayout } from '../ui/useIsPhone';
-import { createPipeGeometry } from './geometries/pipeGeometry';
-import { createElbowGeometry } from './geometries/elbowGeometry';
-import { createFlangeGeometry } from './geometries/flangeGeometry';
-import { createTeeGeometry } from './geometries/teeGeometry';
-import { createReducerGeometry } from './geometries/reducerGeometry';
-import { createValveGeometry } from './geometries/valveGeometry';
-import { createCapGeometry } from './geometries/capGeometry';
+import { createStudsGeometry } from './geometries/flangeGeometry';
+import { buildComponentObject, faceThicknessOf, PieceMaterials } from './buildComponentMesh';
 import { disposeObject } from './geometries/geometryUtils';
 import { computeSpools } from '../core/spools/spoolEngine';
 import { SPOOL_COLORS, ERECTION_COLOR, FIELD_COLORS, FIELD_UNCHANGED_COLOR } from './spoolColors';
 import { useProjectStore } from '../store/useProjectStore';
 import { diffStates } from '../core/field/changeLog';
-import { isFaceEnd } from '../core/graph/PipingGraph';
 import { findScreenMagneticSnap } from './snapping/magneticSnap';
+import { buildModelLabels, ModelLabel } from './modelLabels';
+import { useUiConfigStore } from '../store/useUiConfigStore';
+import { useReferenceStore } from '../store/useReferenceStore';
 
 // Configurar orientación industrial estándar Z-Up globalmente
 THREE.Object3D.DEFAULT_UP.set(0, 0, 1);
@@ -58,6 +55,26 @@ export const CanvasViewer: React.FC = () => {
   const [stretch, setStretch] = useState<{ compId: string; anchor: 'start' | 'end'; length: number } | null>(null);
   // Cota del caño elegido: al tocarla se edita el largo
   const [lengthEdit, setLengthEdit] = useState<string | null>(null);
+  // Tocar la cota de una etiqueta elige el caño y abre la edición del largo
+  const pendingLengthEditRef = useRef(false);
+
+  // Etiquetas permanentes (interruptor en Vistas)
+  const showLabels = useUiConfigStore((s) => s.showLabels);
+  const labels = useMemo<ModelLabel[]>(
+    () =>
+      showLabels
+        ? buildModelLabels(graph, isolatedIds(graph, isolation)).filter((l) => !(l.kind === 'cota' && l.componentId === selectedComponentId))
+        : [],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [showLabels, graph, version, isolation, selectedComponentId]
+  );
+  const labelsDataRef = useRef<ModelLabel[]>([]);
+  const labelElsRef = useRef<(HTMLElement | null)[]>([]);
+  labelsDataRef.current = labels;
+
+  // Referencia de obra (DXF de fondo)
+  const reference = useReferenceStore((s) => s.reference);
+  const refGroupRef = useRef<THREE.LineSegments | null>(null);
 
   // Referencias para la escena Three.js
   const sceneRef = useRef<THREE.Scene | null>(null);
@@ -267,6 +284,28 @@ export const CanvasViewer: React.FC = () => {
         } else mLabel.style.visibility = 'hidden';
       }
 
+      // Etiquetas del modelo: siguen a su caño y se ocultan cuando el caño queda muy chico en pantalla
+      const labelList = labelsDataRef.current;
+      for (let i = 0; i < labelList.length; i++) {
+        const el = labelElsRef.current[i];
+        if (!el) continue;
+        const item = labelList[i];
+        const ndc = item.position.clone().project(camera);
+        let shown = ndc.z < 1 && Math.abs(ndc.x) < 1 && Math.abs(ndc.y) < 1;
+        if (shown) {
+          const a = item.a.clone().project(camera);
+          const b = item.b.clone().project(camera);
+          const px = Math.hypot(((a.x - b.x) * viewW) / 2, ((a.y - b.y) * viewH) / 2);
+          shown = px > (item.kind === 'cota' ? 52 : 110);
+        }
+        if (shown) {
+          const x = ((ndc.x + 1) / 2) * viewW;
+          const y = ((1 - ndc.y) / 2) * viewH + (item.kind === 'elev' ? -24 : item.kind === 'linea' ? 24 : 0);
+          el.style.transform = `translate(${Math.round(x)}px, ${Math.round(y)}px) translate(-50%, -50%)`;
+        }
+        el.style.visibility = shown ? 'visible' : 'hidden';
+      }
+
       renderer.render(scene, camera);
     };
     animate();
@@ -314,6 +353,8 @@ export const CanvasViewer: React.FC = () => {
   const executeFrameAll = () => {
     if (!cameraRef.current || !pipeGroupRef.current) return;
     const box = new THREE.Box3().setFromObject(pipeGroupRef.current);
+    // Sin cañerías todavía: se encuadra la referencia de obra, si hay una a la vista
+    if (box.isEmpty() && refGroupRef.current?.visible) box.setFromObject(refGroupRef.current);
     if (box.isEmpty()) {
       // Modelo vacío: el primer tramo sale del origen, que queda al centro
       cameraTargetRef.current.set(0, 0, 0);
@@ -431,6 +472,18 @@ export const CanvasViewer: React.FC = () => {
       side: THREE.DoubleSide
     });
 
+    // Volantes y palancas
+    const trimMaterial = new THREE.MeshStandardMaterial({ color: 0x1f2937, roughness: 0.5, metalness: 0.6, side: THREE.DoubleSide });
+    const studMaterial = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.45, metalness: 0.8 });
+    const pieceMaterials: PieceMaterials = {
+      pipe: pipeMaterial,
+      fitting: fittingMaterial,
+      tee: teeMaterial,
+      flange: flangeMaterial,
+      valve: valveMaterial,
+      trim: trimMaterial
+    };
+
     const gasketBoltMaterial = new THREE.MeshStandardMaterial({
       color: 0xf59e0b,
       roughness: 0.3,
@@ -530,9 +583,6 @@ export const CanvasViewer: React.FC = () => {
       const isColliding = collidingComponentIds.has(comp.id);
       const isSelected = multiMode ? false : comp.id === selectedComponentId;
       const spoolMat = spoolMaterial(comp.id);
-      const { outerDiameter, wallThickness, cutLength, angle, radius, runTakeOff, branchTakeOff, faceToFace, boltCircle, boltHoles } =
-        comp.parameters;
-
       const pickMat = (defaultMat: THREE.Material) => {
         if (multiIds.has(comp.id)) return multiMaterial;
         if (isSelected) return selectedMaterial;
@@ -540,183 +590,14 @@ export const CanvasViewer: React.FC = () => {
         return spoolMat ?? defaultMat;
       };
 
-      if (comp.type === 'PIPE' && comp.centerline.length >= 2) {
-        const mat = pickMat(pipeMaterial);
-        const start = comp.centerline[0];
-        const end = comp.centerline[comp.centerline.length - 1];
-        const length = cutLength || start.distanceTo(end);
-
-        const geom = createPipeGeometry(outerDiameter, wallThickness, length);
-        const mesh = new THREE.Mesh(geom, mat);
-
-        const vDir = new THREE.Vector3().subVectors(end, start).normalize();
-        const vUp = new THREE.Vector3(0, 0, 1);
-        const quat = new THREE.Quaternion().setFromUnitVectors(vUp, vDir);
-
-        mesh.position.copy(start);
-        mesh.quaternion.copy(quat);
-        tagComponentMesh(mesh, comp.id);
-        pipeGroup.add(mesh);
-      } else if (comp.type === 'ELBOW' && comp.ports.length >= 2) {
-        const mat = pickMat(fittingMaterial);
-        const elbowRadius = radius || 76.2;
-        const geom = createElbowGeometry(outerDiameter, wallThickness, elbowRadius, angle || 90);
-        const mesh = new THREE.Mesh(geom, mat);
-
-        if (comp.parameters.matrixElements && comp.parameters.matrixElements.length === 16) {
-          mesh.matrix.fromArray(comp.parameters.matrixElements);
-          mesh.matrix.decompose(mesh.position, mesh.quaternion, mesh.scale);
-        } else {
-          mesh.position.copy(comp.ports[0].position);
-        }
-
-        tagComponentMesh(mesh, comp.id);
-        pipeGroup.add(mesh);
-      } else if (comp.type === 'FLANGE' && comp.ports.length >= 2) {
-        // Brida con sus medidas de spec: la cara en el puerto de cara y el cuerpo hacia el caño
-        const mat = pickMat(flangeMaterial);
-        const vis = comp.parameters.visual;
-        const facePort = comp.ports.find((p) => isFaceEnd(p)) ?? comp.ports[1];
-        const pipePort = comp.ports.find((p) => p !== facePort) ?? comp.ports[0];
-        const overall =
-          vis?.bodyEnd !== undefined && vis?.bodyStart !== undefined
-            ? Math.max(1, vis.bodyEnd - vis.bodyStart)
-            : faceToFace || 63.5;
-        const geom = createFlangeGeometry(
-          pipePort.outerDiameter || outerDiameter,
-          vis?.flangeOuterDiameter ?? outerDiameter * 2,
-          wallThickness,
-          overall,
-          boltCircle,
-          boltHoles,
-          { flangeThickness: vis?.flangeThickness, hubDiameter: vis?.hubDiameter }
-        );
-        const mesh = new THREE.Mesh(geom, mat);
-        let dir = facePort.position.clone().sub(pipePort.position);
-        if (dir.lengthSq() < 1e-6) dir = facePort.direction.clone();
-        dir.normalize();
-        mesh.position.copy(facePort.position.clone().addScaledVector(dir, -overall));
-        mesh.quaternion.copy(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), dir));
-        tagComponentMesh(mesh, comp.id);
-        pipeGroup.add(mesh);
-      } else if (comp.type === 'TEE') {
-        const mat = pickMat(teeMaterial);
-        const rTakeOff = runTakeOff || Math.max(63.5, outerDiameter * 0.9);
-        const bTakeOff = branchTakeOff || Math.max(63.5, outerDiameter * 0.9);
-        const geom = createTeeGeometry(outerDiameter, wallThickness, rTakeOff, bTakeOff);
-        const mesh = new THREE.Mesh(geom, mat);
-
-        const vertex = comp.centerline[1] || comp.centerline[0] || comp.ports[0]?.position;
-        const p1 = comp.centerline[0] || comp.ports[0]?.position || vertex;
-        const p2 = comp.centerline[2] || comp.ports[1]?.position || vertex.clone().add(new THREE.Vector3(1, 0, 0));
-        const p3 = comp.centerline[3] || comp.ports[2]?.position || vertex.clone().add(new THREE.Vector3(0, 1, 0));
-
-        if (vertex && p1 && p2 && p3) {
-          // Eje Z local: dirección del Run continuo (desde p1 hacia p2)
-          let uRun = new THREE.Vector3().subVectors(p2, p1);
-          if (uRun.lengthSq() < 0.0001) {
-            uRun = comp.ports[1]?.direction?.clone() || new THREE.Vector3(1, 0, 0);
-          }
-          uRun.normalize();
-
-          // Eje Y local: dirección del Ramal Branch (desde vertex hacia p3)
-          let uBranch = new THREE.Vector3().subVectors(p3, vertex);
-          if (uBranch.lengthSq() < 0.0001) {
-            uBranch = comp.ports[2]?.direction?.clone() || new THREE.Vector3(0, 1, 0);
-          }
-          uBranch.normalize();
-
-          // Garantizar ortogonalidad estricta entre Run y Branch para evitar matriz degenerada
-          uBranch.addScaledVector(uRun, -uBranch.dot(uRun));
-          if (uBranch.lengthSq() < 0.0001) {
-            uBranch = Math.abs(uRun.y) < 0.8 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(0, 0, 1);
-            uBranch.addScaledVector(uRun, -uBranch.dot(uRun));
-          }
-          uBranch.normalize();
-
-          // Eje X local = Y x Z (sistema dextrógiro)
-          const uPerp = new THREE.Vector3().crossVectors(uBranch, uRun).normalize();
-
-          const basisMat = new THREE.Matrix4().makeBasis(uPerp, uBranch, uRun);
-          const quat = new THREE.Quaternion().setFromRotationMatrix(basisMat);
-
-          mesh.position.copy(vertex);
-          mesh.quaternion.copy(quat);
-        }
-        tagComponentMesh(mesh, comp.id);
-        pipeGroup.add(mesh);
-      } else if (comp.type === 'REDUCER') {
-        const mat = pickMat(fittingMaterial);
-        const redOD = comp.parameters.reducedOuterDiameter || outerDiameter * 0.7;
-        const geom = createReducerGeometry(outerDiameter, redOD, wallThickness, faceToFace || 88.9);
-        const mesh = new THREE.Mesh(geom, mat);
-        const start = comp.centerline[0] || comp.ports[0]?.position;
-        const end = comp.centerline[1] || comp.ports[1]?.position;
-        if (start && end) {
-          const vDir = new THREE.Vector3().subVectors(end, start).normalize();
-          const quat = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), vDir);
-          mesh.position.copy(start);
-          mesh.quaternion.copy(quat);
-        }
-        tagComponentMesh(mesh, comp.id);
-        pipeGroup.add(mesh);
-      } else if (comp.type === 'VALVE') {
-        const mat = pickMat(valveMaterial);
-        const geom = createValveGeometry(outerDiameter, wallThickness, faceToFace || 178);
-        const mesh = new THREE.Mesh(geom, mat);
-        const start = comp.centerline[0] || comp.ports[0]?.position;
-        const end = comp.centerline[1] || comp.ports[1]?.position;
-        if (start && end) {
-          const vDir = new THREE.Vector3().subVectors(end, start).normalize();
-          const quat = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), vDir);
-          mesh.position.copy(start);
-          mesh.quaternion.copy(quat);
-
-        }
-        tagComponentMesh(mesh, comp.id);
-        pipeGroup.add(mesh);
-      } else if (comp.type === 'CAP') {
-        const mat = pickMat(fittingMaterial);
-        const geom = createCapGeometry(outerDiameter, wallThickness, faceToFace || 38.1);
-        const mesh = new THREE.Mesh(geom, mat);
-        const start = comp.centerline[0] || comp.ports[0]?.position;
-        const end = comp.centerline[1] || (start && comp.ports[0] ? start.clone().add(comp.ports[0].direction.clone().negate().multiplyScalar(38.1)) : null);
-        if (start && end) {
-          const vDir = new THREE.Vector3().subVectors(end, start).normalize();
-          const quat = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), vDir);
-          mesh.position.copy(start);
-          mesh.quaternion.copy(quat);
-        }
-        tagComponentMesh(mesh, comp.id);
-        pipeGroup.add(mesh);
-      } else if (['OLET', 'INSTRUMENT', 'COUPLING', 'CROSS', 'MISC'].includes(comp.type)) {
-        // Piezas que llegan de un PCF: cuerpos cilíndricos entre los puntos de su eje
-        const mat = pickMat(comp.type === 'INSTRUMENT' ? valveMaterial : comp.type === 'CROSS' ? teeMaterial : fittingMaterial);
-        const group = new THREE.Group();
-        const pts = comp.centerline.length >= 2 ? comp.centerline : comp.ports.map((p) => p.position);
-        const segments: [THREE.Vector3, THREE.Vector3, number][] = [];
-        if (comp.type === 'CROSS' && pts.length >= 3) {
-          const c = pts[1];
-          comp.ports.forEach((p) => segments.push([c, p.position, p.outerDiameter]));
-        } else if (comp.type === 'OLET') {
-          segments.push([pts[0], pts[pts.length - 1], comp.ports[0]?.outerDiameter * 1.25 || outerDiameter]);
-        } else {
-          const scale = comp.type === 'INSTRUMENT' ? 1.6 : comp.type === 'COUPLING' ? 1.3 : 1.15;
-          for (let i = 0; i + 1 < Math.min(pts.length, comp.ports.length || pts.length); i++) {
-            segments.push([pts[i], pts[i + 1], (comp.ports[i]?.outerDiameter || outerDiameter) * scale]);
-          }
-        }
-        for (const [a, b, d] of segments) {
-          const len = a.distanceTo(b);
-          if (len < 0.01) continue;
-          const geom = new THREE.CylinderGeometry(d / 2, d / 2, len, 24);
-          const m = new THREE.Mesh(geom, mat);
-          m.position.copy(a.clone().lerp(b, 0.5));
-          m.quaternion.copy(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), b.clone().sub(a).normalize()));
-          group.add(m);
-        }
-        tagComponentMesh(group, comp.id);
-        pipeGroup.add(group);
+      const obj = buildComponentObject(comp, {
+        materials: pieceMaterials,
+        pick: pickMat,
+        hostOuterDiameter: comp.type === 'OLET' ? graph.oletHost(comp)?.parameters.outerDiameter : undefined
+      });
+      if (obj) {
+        tagComponentMesh(obj, comp.id);
+        pipeGroup.add(obj);
       }
     }
 
@@ -765,6 +646,32 @@ export const CanvasViewer: React.FC = () => {
           gMesh.position.copy(joint.position);
           gMesh.quaternion.copy(quat);
           pipeGroup.add(gMesh);
+
+          // Espárragos con tuercas, del largo que piden las dos piezas y la junta
+          const portB = graph.ports.get(joint.portBId);
+          const compA = graph.components.get(portA.componentId);
+          const compB = portB ? graph.components.get(portB.componentId) : undefined;
+          const withBolts = [compA, compB].find((c) => c?.parameters.boltCircle && (c.parameters.boltCount || c.parameters.boltHoles));
+          if (portB && compA && compB && withBolts) {
+            const tA = faceThicknessOf(compA);
+            const tB = faceThicknessOf(compB);
+            const gap = portA.position.distanceTo(portB.position);
+            const size = /(\d+)\s*\/\s*(\d+)/.exec(withBolts.parameters.boltSize || '');
+            const whole = /^\s*(\d+)(?=[\s-]+\d+\s*\/|\s*")/.exec(withBolts.parameters.boltSize || '');
+            const studDia = Math.min(40, Math.max(10, ((whole ? Number(whole[1]) : 0) + (size ? Number(size[1]) / Number(size[2]) : 0)) * 25.4 || 16));
+            const studs = new THREE.Mesh(
+              createStudsGeometry(
+                withBolts.parameters.boltCircle!,
+                withBolts.parameters.boltCount || withBolts.parameters.boltHoles || 4,
+                studDia,
+                tA + tB + gap + studDia * 3.2
+              ),
+              studMaterial
+            );
+            studs.position.copy(portA.position.clone().addScaledVector(portA.direction.clone().normalize(), (gap + tB - tA) / 2));
+            studs.quaternion.copy(quat);
+            pipeGroup.add(studs);
+          }
         } else {
           // Soldadura de campo: anillo naranja más grueso (corta el spool)
           const ringR = (portA.outerDiameter || 60.3) / 2;
@@ -954,8 +861,8 @@ export const CanvasViewer: React.FC = () => {
       }
     }
 
-    const openPorts = graph.getOpenPorts();
-    const activePort = selectedPortId ? graph.ports.get(selectedPortId) : openPorts.length > 0 ? openPorts[openPorts.length - 1] : null;
+    // Solo la boca elegida enciende el cursor: sin boca activa no hay compás ni caño fantasma
+    const activePort = selectedPortId ? graph.ports.get(selectedPortId) ?? null : null;
     // Sin modelo todavía, el primer tramo sale del origen
     const origin = activePort ? activePort.position.clone() : graph.components.size === 0 ? new THREE.Vector3(0, 0, 0) : null;
     if (!origin || (activePort && activePort.connectedJointId)) return;
@@ -1065,8 +972,41 @@ export const CanvasViewer: React.FC = () => {
     handleRef.current = handle;
   }, [graph, version, selectedPortId, selectedComponentId, activeDirection, numpadValue, connectRoutes, connectIndex, connectTargetId, multiMode, stretch]);
 
-  // Otra pieza elegida: se cierra la edición de la cota
-  useEffect(() => setLengthEdit(null), [selectedComponentId, version]);
+  // Otra pieza elegida: se cierra la edición de la cota (salvo que se haya tocado la cota de una etiqueta)
+  useEffect(() => {
+    const comp = selectedComponentId ? graph.components.get(selectedComponentId) : undefined;
+    if (pendingLengthEditRef.current && comp?.type === 'PIPE' && comp.ports.length >= 2) {
+      setLengthEdit(String(Math.round(comp.parameters.cutLength || comp.ports[0].position.distanceTo(comp.ports[1].position))));
+    } else setLengthEdit(null);
+    pendingLengthEditRef.current = false;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedComponentId, version]);
+
+  // La referencia de obra se guarda con el proyecto: al cambiar de modelo se trae la suya
+  useEffect(() => {
+    void useReferenceStore.getState().loadForActiveProject();
+  }, [graph]);
+
+  // Referencia de obra: las líneas del DXF, en gris, debajo del modelo
+  useEffect(() => {
+    const scene = sceneRef.current;
+    if (!scene || !reference || !reference.segments.length) return;
+    const positions = new Float32Array(reference.segments.length);
+    for (let i = 0; i < positions.length; i++) positions[i] = reference.segments[i] * reference.scale;
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    const lines = new THREE.LineSegments(geometry, new THREE.LineBasicMaterial({ color: 0x7c8aa0, transparent: true, opacity: 0.75 }));
+    lines.visible = reference.visible;
+    lines.userData.reference = true;
+    scene.add(lines);
+    refGroupRef.current = lines;
+    return () => {
+      scene.remove(lines);
+      geometry.dispose();
+      (lines.material as THREE.Material).dispose();
+      if (refGroupRef.current === lines) refGroupRef.current = null;
+    };
+  }, [reference]);
 
   // Gestos multitáctiles y selección 3D CAD:
   // - Tap corto (< 8px): Selecciona puerto abierto (boca/ramal) o selecciona cañería/accesorio en 3D
@@ -1430,7 +1370,10 @@ export const CanvasViewer: React.FC = () => {
           if (portId) {
             // Conectando: el toque elige la boca de destino en vez de cambiar la boca activa
             if (store.connectPicking) store.pickConnectTarget(portId);
-            else selectPortAndAlign(portId);
+            else if (store.alignPicking && portId !== store.selectedPortId) {
+              const target = store.graph.ports.get(portId);
+              if (target) store.pickAlignTarget(target.position.clone());
+            } else selectPortAndAlign(portId);
             if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate(20);
             handled = true;
           }
@@ -1442,8 +1385,10 @@ export const CanvasViewer: React.FC = () => {
           for (const hit of compHits) {
             const compId = hit.object.userData?.componentId || hit.object.parent?.userData?.componentId;
             if (compId && inSection(hit.point)) {
+              // Alinear: la pieza tocada da la referencia en vez de quedar elegida
+              if (store.alignPicking) store.pickAlignTarget(measurePointFor(compId, hit.point));
               // Selección múltiple: el toque suma o quita la pieza
-              if (store.multiMode) store.toggleMultiComponent(compId);
+              else if (store.multiMode) store.toggleMultiComponent(compId);
               else setSelectedComponentId(compId);
               if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate(15);
               handled = true;
@@ -1453,8 +1398,13 @@ export const CanvasViewer: React.FC = () => {
         }
 
         // Si se tocó el espacio vacío del visor 3D, deseleccionar la pieza activa
+        // También se suelta la boca activa: el compás y el caño fantasma se apagan hasta elegir otra
         if (!handled && !store.multiMode && !store.measureActive) {
-          setSelectedComponentId(null);
+          if (store.alignPicking) store.startAlignPicking();
+          else {
+            setSelectedComponentId(null);
+            if (!store.connectPicking && !store.connectRoutes.length) store.setSelectedPortId(null);
+          }
         }
       }
     }
@@ -1524,6 +1474,46 @@ export const CanvasViewer: React.FC = () => {
           </div>
         )}
       </div>
+      {/* Etiquetas permanentes: cotas (se tocan para cambiar el largo), elevaciones y número de línea */}
+      {labels.length > 0 && (
+        <div className="absolute inset-0 pointer-events-none overflow-hidden" data-model-labels>
+          {labels.map((l, i) =>
+            l.kind === 'cota' ? (
+              <button
+                key={l.id}
+                ref={(el) => {
+                  labelElsRef.current[i] = el;
+                }}
+                type="button"
+                data-label="cota"
+                style={{ visibility: 'hidden' }}
+                onClick={() => {
+                  pendingLengthEditRef.current = true;
+                  usePipingStore.getState().setSelectedComponentId(l.componentId);
+                }}
+                className="absolute left-0 top-0 pointer-events-auto h-6 min-w-[2.25rem] px-1.5 rounded-md bg-[#0f172a]/85 border border-slate-500/70 text-[11px] font-mono font-bold text-slate-100 active:scale-95"
+                title="Cambiar el largo de este caño"
+              >
+                {l.text}
+              </button>
+            ) : (
+              <div
+                key={l.id}
+                ref={(el) => {
+                  labelElsRef.current[i] = el;
+                }}
+                data-label={l.kind}
+                style={{ visibility: 'hidden' }}
+                className={`absolute left-0 top-0 px-1.5 py-0.5 rounded-md text-[10px] font-mono font-bold whitespace-nowrap border ${
+                  l.kind === 'elev' ? 'bg-[#082f49]/85 border-sky-500/60 text-sky-200' : 'bg-[#422006]/85 border-amber-500/60 text-amber-200'
+                }`}
+              >
+                {l.text}
+              </div>
+            )
+          )}
+        </div>
+      )}
       {/* Cota del caño elegido: se toca para escribir el largo; mientras se estira muestra el largo nuevo */}
       <div ref={dimRef} style={{ visibility: 'hidden' }} className="absolute left-0 top-0">
         {(() => {

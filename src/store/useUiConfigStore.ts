@@ -75,6 +75,17 @@ export const PROPERTY_FIELD_LABELS: Record<
 
 const STORAGE_KEY = 'achero_p3d_ui_config_v1';
 const TOUR_DONE_KEY = 'achero_p3d_tour_done_v1';
+const RECENT_PIECES_KEY = 'achero_p3d_recent_pieces_v1';
+
+const loadRecentPieces = (): string[] => {
+  try {
+    const raw = typeof window === 'undefined' ? null : window.localStorage.getItem(RECENT_PIECES_KEY);
+    const list = raw ? JSON.parse(raw) : [];
+    return Array.isArray(list) ? list.filter((x) => typeof x === 'string').slice(0, 8) : [];
+  } catch {
+    return [];
+  }
+};
 
 /** El recorrido guiado ya se vio (o se salteó) en este dispositivo */
 export const tourAlreadySeen = (): boolean => {
@@ -158,6 +169,12 @@ interface UiConfigState {
   mobilePanel: MobilePanel | null;
   /** Hoja de ayuda con los gestos */
   helpOpen: boolean;
+  /** Últimas piezas insertadas desde la paleta (ids de paletteItems) */
+  recentPieces: string[];
+  pushRecentPiece: (id: string) => void;
+  /** Etiquetas permanentes en el modelo: cotas, elevaciones y número de línea */
+  showLabels: boolean;
+  toggleLabels: () => void;
   /** Lista de avisos de la revisión del modelo */
   issuesOpen: boolean;
   /** Paso del recorrido guiado, o null si no está en curso */
@@ -251,6 +268,32 @@ export const useUiConfigStore = create<UiConfigState>((set, get) => {
     topZIndex: 30,
     mobilePanel: 'trazar',
     helpOpen: false,
+    recentPieces: loadRecentPieces(),
+    pushRecentPiece: (id) => {
+      const next = [id, ...get().recentPieces.filter((x) => x !== id)].slice(0, 8);
+      try {
+        window.localStorage.setItem(RECENT_PIECES_KEY, JSON.stringify(next));
+      } catch {
+        // Sin almacenamiento: los recientes duran lo que dura la sesión
+      }
+      set({ recentPieces: next });
+    },
+    showLabels: (() => {
+      try {
+        return typeof window !== 'undefined' && window.localStorage.getItem('achero_p3d_labels_v1') === '1';
+      } catch {
+        return false;
+      }
+    })(),
+    toggleLabels: () => {
+      const next = !get().showLabels;
+      try {
+        window.localStorage.setItem('achero_p3d_labels_v1', next ? '1' : '0');
+      } catch {
+        // Sin almacenamiento: vale para esta sesión
+      }
+      set({ showLabels: next });
+    },
     issuesOpen: false,
     tourStep: null,
 

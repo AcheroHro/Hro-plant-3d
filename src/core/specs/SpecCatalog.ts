@@ -55,9 +55,11 @@ const APP_TYPE: Partial<Record<PartCategory, ComponentType>> = {
   ELBOW: 'ELBOW',
   TEE: 'TEE',
   FLANGE: 'FLANGE',
+  FLANGE_BLIND: 'FLANGE',
   VALVE: 'VALVE',
   REDUCER: 'REDUCER',
   CAP: 'CAP',
+  COUPLING: 'COUPLING',
   GASKET: 'GASKET',
   BOLT_SET: 'BOLT_SET'
 };
@@ -327,7 +329,7 @@ export class SpecCatalog {
 
     let boltCircle = part.extra.boltCircleMm;
     let boltHoles = part.extra.boltHoles;
-    if ((part.category === 'FLANGE' || part.category === 'VALVE') && (!boltCircle || !boltHoles) && (!pressureClass || pressureClass === '150')) {
+    if ((part.category === 'FLANGE' || part.category === 'FLANGE_BLIND' || part.category === 'VALVE') && (!boltCircle || !boltHoles) && (!pressureClass || pressureClass === '150')) {
       const t = B165_CL150[nd];
       if (t) {
         boltCircle = boltCircle ?? t[0] * 25.4;

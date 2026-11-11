@@ -73,7 +73,7 @@ export class PipingGraph {
   }
 
   /** Arma un puerto tomando diámetro, OD y extremo del puerto Sn de la pieza de spec */
-  private portFromSpec(
+  public portFromSpec(
     componentId: string,
     index: number,
     position: THREE.Vector3,
@@ -99,7 +99,7 @@ export class PipingGraph {
   }
 
   /** Datos de la pieza de spec que viajan con el componente (para PCF, BOM y avisos) */
-  private specParameters(spec: SpecFitting): Partial<Component['parameters']> {
+  public specParameters(spec: SpecFitting): Partial<Component['parameters']> {
     return {
       itemCode: spec.itemCode,
       skey: spec.skey,
@@ -495,6 +495,37 @@ export class PipingGraph {
   }
 
   /**
+   * Válvula con lo que necesita para quedar montada. Si es de caras (bridada, wafer o lug) y hay
+   * brida de la spec, entran brida + junta antes (cuando la boca es de caño) y junta + brida
+   * después, como el AutoFlange de Plant 3D. Devuelve la boca por donde sigue la línea.
+   */
+  public addValveAssembly(
+    port: Port,
+    valveSpec: SpecFitting,
+    options: { flangeSpec?: SpecFitting | null; gasketSpec?: SpecFitting | null; boltSetSpec?: SpecFitting | null } = {}
+  ): { valve: Component; flanges: Component[]; outPort: Port } {
+    const { flangeSpec, gasketSpec, boltSetSpec } = options;
+    const valveFace = valveSpec.plantEndTypes
+      ? isFaceEnd({ plantEndType: valveSpec.plantEndTypes[0], endType: valveSpec.endType })
+      : valveSpec.endType === 'FLANG';
+    const flanges: Component[] = [];
+    let inPort = port;
+    if (valveFace && flangeSpec && !isFaceEnd(port)) {
+      const before = this.addFlange(port, flangeSpec, gasketSpec, boltSetSpec);
+      flanges.push(before);
+      inPort = before.ports[1];
+    }
+    const valve = this.addValve(inPort, valveSpec, gasketSpec, boltSetSpec);
+    let outPort = valve.ports[1];
+    if (valveFace && flangeSpec) {
+      const after = this.addFlange(outPort, flangeSpec, gasketSpec, boltSetSpec);
+      flanges.push(after);
+      outPort = after.ports[1];
+    }
+    return { valve, flanges, outPort };
+  }
+
+  /**
    * Inserta una Te en un puerto abierto garantizando 90° en la derivación.
    * Si la pieza de spec es reductora, el ramal toma su diámetro y OD reales (puerto S3).
    */
@@ -717,6 +748,13 @@ export class PipingGraph {
       return comp;
     }
 
+    if (comp.type === 'VALVE') {
+      // El volante o la palanca giran alrededor del caño; las bocas no se mueven
+      const next = (((comp.parameters.stemAngle ?? 0) + angleDeg) % 360 + 360) % 360;
+      comp.parameters.stemAngle = next < 0.01 ? undefined : next;
+      return comp;
+    }
+
     if (comp.type === 'ELBOW' && comp.ports.length >= 2) {
       const portOut = comp.ports[1];
       const p1 = comp.ports[0].position.clone();
@@ -882,6 +920,95 @@ export class PipingGraph {
     });
     delete comp.parameters.pcf;
     return comp;
+  }
+
+  /** Boca del otro lado de la unión, si la boca está unida */
+  public matedPort(port: Port): Port | null {
+    const joint = port.connectedJointId ? this.joints.get(port.connectedJointId) : null;
+    if (!joint) return null;
+    return this.ports.get(joint.portAId === port.id ? joint.portBId : joint.portAId) ?? null;
+  }
+
+  /** Vuelve a resolver la unión de una boca después de cambiarle el extremo o moverla */
+  public refreshJoint(port: Port): string[] {
+    const joint = port.connectedJointId ? this.joints.get(port.connectedJointId) : null;
+    const other = this.matedPort(port);
+    if (!joint || !other) return [];
+    const resolved = this.resolveJoint(port, other);
+    joint.type = resolved.jointType;
+    joint.plantJoint = resolved.plantJoint;
+    joint.position = port.position.clone().lerp(other.position, 0.5);
+    return resolved.problems;
+  }
+
+  /**
+   * Qué hace "dar vuelta" con una pieza: una brida cambia la cara de lado, una válvula cambia
+   * el sentido de flujo y una reducción excéntrica pasa de plano abajo a plano arriba.
+   */
+  public flipKind(componentId: string): 'flange' | 'valve' | 'reducer' | null {
+    const comp = this.components.get(componentId);
+    if (!comp || comp.ports.length !== 2) return null;
+    if (comp.type === 'FLANGE') return isFaceEnd(comp.ports[0]) !== isFaceEnd(comp.ports[1]) ? 'flange' : null;
+    if (comp.type === 'VALVE') return 'valve';
+    if (comp.type === 'REDUCER') return this.reducerLateral(comp).length() > 0.05 ? 'reducer' : null;
+    return null;
+  }
+
+  /** Corrimiento lateral de la salida de una reducción respecto del eje de entrada */
+  private reducerLateral(comp: Component): THREE.Vector3 {
+    const [a, b] = comp.ports;
+    const axis = b.direction.clone().normalize();
+    const span = b.position.clone().sub(a.position);
+    return span.addScaledVector(axis, -span.dot(axis));
+  }
+
+  /** ¿Hacia dónde queda la generatriz recta de una excéntrica? null si es concéntrica o está de costado */
+  public reducerFlatSide(componentId: string): 'abajo' | 'arriba' | null {
+    const comp = this.components.get(componentId);
+    if (!comp || comp.type !== 'REDUCER' || comp.ports.length !== 2) return null;
+    const lateral = this.reducerLateral(comp);
+    if (lateral.length() < 0.05) return null;
+    // El eje del extremo chico se corre hacia el lado del plano
+    const [a, b] = comp.ports;
+    const towardSmall = a.nominalDiameter > b.nominalDiameter ? lateral : lateral.clone().negate();
+    const axis = b.direction.clone().normalize();
+    const down = Math.abs(axis.z) > 0.9 ? new THREE.Vector3(-1, 0, 0) : new THREE.Vector3(0, 0, -1);
+    const d = towardSmall.normalize().dot(down);
+    return d > 0.5 ? 'abajo' : d < -0.5 ? 'arriba' : null;
+  }
+
+  /**
+   * Da vuelta una pieza en su lugar (ver `flipKind`). En la excéntrica la salida se corre al otro
+   * lado y arrastra lo que tenga conectado. Devuelve los avisos de las uniones que quedaron mal.
+   */
+  public flipComponent(componentId: string): { kind: 'flange' | 'valve' | 'reducer'; problems: string[] } | null {
+    const comp = this.components.get(componentId);
+    const kind = this.flipKind(componentId);
+    if (!comp || !kind) return null;
+    const [a, b] = comp.ports;
+    if (kind === 'flange') {
+      // La cara pasa al otro extremo: las bocas intercambian diámetro, extremo y clase
+      const keys = ['nominalDiameter', 'outerDiameter', 'wallThickness', 'schedule', 'endType', 'plantEndType', 'pressureClass'] as const;
+      const record = (p: Port) => p as unknown as Record<string, unknown>;
+      for (const k of keys) {
+        const tmp = record(a)[k];
+        record(a)[k] = record(b)[k];
+        record(b)[k] = tmp;
+      }
+    } else if (kind === 'valve') {
+      // Sentido de flujo: la entrada pasa a ser la salida
+      comp.ports.reverse();
+      comp.ports.forEach((p, i) => (p.index = i + 1));
+      comp.centerline.reverse();
+    } else {
+      const delta = this.reducerLateral(comp).multiplyScalar(-2);
+      if (b.connectedJointId) this.translateDownstream(b.id, comp.id, delta);
+      b.position.add(delta);
+      comp.centerline[comp.centerline.length - 1].copy(b.position);
+    }
+    delete comp.parameters.pcf;
+    const problems = [...this.refreshJoint(a), ...this.refreshJoint(b)];
+    return { kind, problems };
   }
 
   /** Todas las piezas unidas, directa o indirectamente, a una pieza (la línea entera) */
@@ -1261,19 +1388,14 @@ export class PipingGraph {
       fitting = this.addTee(pipe1.ports[1], bDir, fittingSpec);
       outPort = fitting.ports[1];
     } else if (fittingSpec.partType === 'VALVE') {
-      let inPort = pipe1.ports[1];
-      if (needsFlanges) {
-        const fA = this.addFlange(inPort, options!.flangeSpec!, options?.gasketSpec, options?.boltSetSpec);
-        extra.push(fA);
-        inPort = fA.ports[1];
-      }
-      fitting = this.addValve(inPort, fittingSpec, options?.gasketSpec, options?.boltSetSpec);
-      outPort = fitting.ports[1];
-      if (needsFlanges) {
-        const fB = this.addFlange(outPort, options!.flangeSpec!, options?.gasketSpec, options?.boltSetSpec);
-        extra.push(fB);
-        outPort = fB.ports[1];
-      }
+      const assembly = this.addValveAssembly(pipe1.ports[1], fittingSpec, {
+        flangeSpec: needsFlanges ? options!.flangeSpec : null,
+        gasketSpec: options?.gasketSpec,
+        boltSetSpec: options?.boltSetSpec
+      });
+      fitting = assembly.valve;
+      extra.push(...assembly.flanges);
+      outPort = assembly.outPort;
     } else {
       fitting = this.addFlange(pipe1.ports[1], needsFlanges ? options!.flangeSpec! : fittingSpec, options?.gasketSpec, options?.boltSetSpec);
       outPort = fitting.ports[1];
@@ -1297,7 +1419,7 @@ export class PipingGraph {
    * Inserta una reducción en un puerto abierto. El extremo chico toma diámetro y OD del
    * puerto S2 de la spec; las excéntricas corren el eje chico (por defecto, plano abajo).
    */
-  public addReducer(port: Port, reducerSpec: SpecFitting, reversed = false): Component {
+  public addReducer(port: Port, reducerSpec: SpecFitting, reversed = false, flatUp = false): Component {
     const compId = this.generateId('red');
     const L = reducerSpec?.faceToFace || 88.9;
     const dir = port.direction.clone().normalize();
@@ -1314,7 +1436,8 @@ export class PipingGraph {
       // Plano abajo: el eje chico baja (dirección -Z); en tramos verticales se usa -X
       const down = Math.abs(dir.z) > 0.9 ? new THREE.Vector3(-1, 0, 0) : new THREE.Vector3(0, 0, -1);
       down.addScaledVector(dir, -down.dot(dir)).normalize();
-      p2.addScaledVector(down, reversed ? -offset : offset);
+      // Plano arriba: se alinean las generatrices de arriba y el eje chico sube
+      p2.addScaledVector(down, (reversed ? -offset : offset) * (flatUp ? -1 : 1));
     }
 
     // `reversed`: ampliación, se entra por el extremo chico y se sale por el grande
@@ -1348,6 +1471,98 @@ export class PipingGraph {
       }
     };
 
+    this.addComponent(component);
+    this.connectPorts(port.id, port1.id);
+    return component;
+  }
+
+  /**
+   * Brida ciega: cierra la línea contra una cara de brida, con junta y bulones. Si la boca es un
+   * extremo de caño entra primero la brida de la spec.
+   */
+  public addBlindFlange(
+    port: Port,
+    blindSpec: SpecFitting,
+    options: { flangeSpec?: SpecFitting | null; gasketSpec?: SpecFitting | null; boltSetSpec?: SpecFitting | null } = {}
+  ): { blind: Component; flange: Component | null } {
+    const { flangeSpec, gasketSpec, boltSetSpec } = options;
+    let flange: Component | null = null;
+    let face = port;
+    if (!isFaceEnd(port)) {
+      if (!flangeSpec) throw new Error('La brida ciega va contra una cara de brida y la spec no tiene brida para esta boca.');
+      flange = this.addFlange(port, flangeSpec, gasketSpec, boltSetSpec);
+      face = flange.ports[1];
+    }
+    const compId = this.generateId('flg');
+    const thickness = blindSpec.faceToFace || blindSpec.visual?.flangeThickness || 20;
+    const gap = gasketSpec?.gasketThicknessMm ?? 0;
+    const dir = face.direction.clone().normalize();
+    const p1 = face.position.clone().addScaledVector(dir, gap);
+    const p2 = p1.clone().addScaledVector(dir, thickness);
+    const port1 = this.portFromSpec(compId, 1, p1, dir.clone().negate(), blindSpec, 0);
+    if (!blindSpec.plantEndTypes) port1.endType = 'FLANG';
+    port1.nominalDiameter = face.nominalDiameter;
+    port1.outerDiameter = face.outerDiameter;
+
+    const nd = face.nominalDiameter;
+    const boltCount = boltSetSpec?.boltCount || blindSpec.boltHoles || (nd >= 4 ? 8 : 4);
+    const blind: Component = {
+      id: compId,
+      type: 'FLANGE',
+      specCode: blindSpec.specCode,
+      catalogId: String(blindSpec.pnpid),
+      ports: [port1],
+      centerline: [p1.clone(), p2.clone()],
+      parameters: {
+        nominalDiameter: nd,
+        outerDiameter: face.outerDiameter,
+        wallThickness: blindSpec.wallThickness,
+        schedule: blindSpec.schedule,
+        faceToFace: thickness,
+        boltCircle: blindSpec.boltCircle || face.outerDiameter * 1.3,
+        boltHoles: boltCount,
+        description: blindSpec.shortDescription,
+        gasketDescription: gasketSpec?.shortDescription,
+        gasketThicknessMm: gasketSpec?.gasketThicknessMm,
+        boltSetDescription: boltSetSpec?.shortDescription,
+        boltSize: boltSetSpec?.boltSize || (nd >= 4 ? '5/8"' : '1/2"'),
+        boltCount,
+        boltLengthMm: boltSetSpec?.boltLengthMm,
+        ...this.specParameters(blindSpec),
+        skey: blindSpec.skey || 'FLBL'
+      }
+    };
+    this.addComponent(blind);
+    this.connectPorts(face.id, port1.id, undefined, { gapMm: gap });
+    return { blind, flange };
+  }
+
+  /** Cupla de la spec en un puerto abierto: une dos caños en línea (socket o rosca) */
+  public addCoupling(port: Port, couplingSpec: SpecFitting): Component {
+    const compId = this.generateId('cpl');
+    const span = Math.max(0, couplingSpec.faceToFace ?? 0);
+    const dir = port.direction.clone().normalize();
+    const p1 = port.position.clone();
+    const p2 = p1.clone().addScaledVector(dir, span);
+    const port1 = this.portFromSpec(compId, 1, p1, dir.clone().negate(), couplingSpec, 0);
+    const port2 = this.portFromSpec(compId, 2, p2, dir, couplingSpec, 1);
+    const component: Component = {
+      id: compId,
+      type: 'COUPLING',
+      specCode: couplingSpec.specCode,
+      catalogId: String(couplingSpec.pnpid),
+      ports: [port1, port2],
+      centerline: [p1.clone(), p2.clone()],
+      parameters: {
+        nominalDiameter: couplingSpec.nominalDiameter,
+        outerDiameter: couplingSpec.outerDiameter,
+        wallThickness: couplingSpec.wallThickness,
+        schedule: couplingSpec.schedule,
+        faceToFace: span,
+        description: couplingSpec.shortDescription,
+        ...this.specParameters(couplingSpec)
+      }
+    };
     this.addComponent(component);
     this.connectPorts(port.id, port1.id);
     return component;

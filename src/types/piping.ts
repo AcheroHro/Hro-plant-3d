@@ -55,7 +55,12 @@ export interface PartVisualDims {
   flangeThickness?: number;
   hubDiameter?: number;
   bodyDiameter?: number;
+  /** Válvulas: alto del accionamiento desde el eje, diámetro del volante y largo de la palanca (mm) */
   actuatorHeight?: number;
+  actuatorDiameter?: number;
+  actuatorLength?: number;
+  actuator?: 'wheel' | 'lever' | 'none';
+  valveKind?: 'gate' | 'globe' | 'ball' | 'check' | 'butterfly' | 'plug' | 'other';
 }
 
 /** Línea de un bloque PCF tal como venía en el archivo */
@@ -195,6 +200,8 @@ export interface Component {
     visual?: PartVisualDims;
     /** Reducción excéntrica: corrimiento lateral del extremo chico (mm) */
     lateralOffset?: number;
+    /** Válvula: giro del vástago alrededor del caño, en grados (0 = hacia arriba) */
+    stemAngle?: number;
     /** Codo recortado a un ángulo que no es de catálogo: ángulo del codo de origen (45 o 90) */
     trimmedFrom?: number;
     /** Derivación soldada directo al caño (injerto / stub-in), sin accesorio */

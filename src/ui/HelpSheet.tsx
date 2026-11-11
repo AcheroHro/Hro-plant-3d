@@ -21,10 +21,19 @@ const TOUCH: HelpGroup[] = [
   {
     title: 'Trazar',
     rows: [
-      ['Tocar una boca libre', 'La línea sigue desde ahí.'],
+      ['Tocar una boca libre', 'La línea sigue desde ahí y aparece el compás.'],
+      ['Tocar el fondo', 'Suelta la pieza y la boca: el compás se apaga hasta que elijas otra boca.'],
       ['Flechas sobre la boca o fila X Y Z', 'Eligen hacia dónde va el caño. Si cambia de rumbo, el codo se pone solo.'],
       ['Arrastrar la manija del caño fantasma', 'Da el largo con el dedo. También se puede escribir y tocar Trazar.'],
       ['Giro, Pend., Desvío y Elev.', 'Ángulos libres, pendiente, corrimientos y llegar a una elevación.']
+    ]
+  },
+  {
+    title: 'Piezas',
+    rows: [
+      ['Tocar un botón de Piezas', 'Pone en la boca activa la pieza que la spec tiene en ese diámetro.'],
+      ['Mantener apretado un botón con flecha', 'Abre las variantes de la spec: otra familia, otra medida, plano abajo o arriba.'],
+      ['Válvula bridada y brida ciega', 'Entran con sus bridas y juntas.']
     ]
   },
   {
@@ -52,10 +61,19 @@ const MOUSE: HelpGroup[] = [
   {
     title: 'Trazar',
     rows: [
-      ['Clic en una boca libre', 'La línea sigue desde ahí.'],
+      ['Clic en una boca libre', 'La línea sigue desde ahí y aparece el compás.'],
+      ['Clic en el fondo', 'Suelta la pieza y la boca: el compás se apaga hasta que elijas otra boca.'],
       ['Flechas sobre la boca o fila X Y Z', 'Eligen hacia dónde va el caño. Si cambia de rumbo, el codo se pone solo.'],
       ['Largo y Enter', 'Traza el tramo. También se puede arrastrar la manija del caño fantasma.'],
       ['Giro, Pend., Desvío y Elev.', 'Ángulos libres, pendiente, corrimientos y llegar a una elevación.']
+    ]
+  },
+  {
+    title: 'Piezas',
+    rows: [
+      ['Clic en un botón de Piezas', 'Pone en la boca activa la pieza que la spec tiene en ese diámetro.'],
+      ['Clic derecho en un botón con flecha', 'Abre las variantes de la spec: otra familia, otra medida, plano abajo o arriba.'],
+      ['Válvula bridada y brida ciega', 'Entran con sus bridas y juntas.']
     ]
   },
   {

@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { PipingGraph } from '../graph/PipingGraph';
+import { isFaceEnd, PipingGraph } from '../graph/PipingGraph';
 import { Component } from '../../types/piping';
 
 export type IssueSeverity = 'error' | 'warning' | 'info';
@@ -10,6 +10,7 @@ export interface ModelIssue {
     | 'JOINT_SIZE'
     | 'JOINT_GAP'
     | 'JOINT_ANGLE'
+    | 'FLANGE_REVERSED'
     | 'ORPHAN_BRANCH'
     | 'SHORT_NIPPLE'
     | 'LONG_PIPE'
@@ -92,6 +93,22 @@ export function validateModel(graph: PipingGraph, options: ValidateOptions = {})
         detail: `${pair} están unidos sin reducción.`,
         componentIds: ids
       });
+    }
+    // Una cara de brida contra un extremo de caño: la brida quedó mirando para el otro lado
+    const faceA = isFaceEnd(a);
+    const faceB = isFaceEnd(b);
+    if (faceA !== faceB) {
+      const plain = faceA ? b : a;
+      const plainComp = faceA ? compB : compA;
+      if (plainComp.type === 'PIPE' || plain.plantEndType) {
+        issues.push({
+          code: 'FLANGE_REVERSED',
+          severity: 'error',
+          title: 'Cara de brida contra un extremo de caño',
+          detail: `${pair}: una de las dos piezas quedó al revés. Las caras van juntas, con junta y bulones.`,
+          componentIds: faceA ? ids : [compB.id, compA.id]
+        });
+      }
     }
     const gap = a.position.distanceTo(b.position) - (joint.gapMm ?? 0);
     if (Math.abs(gap) > 1) {

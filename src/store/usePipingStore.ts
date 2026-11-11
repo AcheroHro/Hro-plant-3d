@@ -1,8 +1,10 @@
 import { create } from 'zustand';
 import * as THREE from 'three';
 import { PipingGraph, isFaceEnd } from '../core/graph/PipingGraph';
+import { resizeRun } from '../core/graph/resizeRun';
 import { SpecDatabaseReader } from '../core/specs/SpecDatabaseReader';
 import { PartCategory } from '../core/specs/catalogTypes';
+import { valveKindFrom } from '../core/specs/valveKind';
 import {
   LoadedSpec,
   loadBundledSpec,
@@ -14,7 +16,7 @@ import {
 import { saveGraphToIndexedDb, loadActiveProject, ProjectRecord } from '../persistence/indexedDbStorage';
 import { detectPipingCollisions } from '../viewport/collision/collisionDetector';
 import { calculateElbowPlacement } from '../core/math/elbowSolver';
-import { SerializedGraphState, FieldWeldKind, ComponentType, NippleEndFinish, Port, SpecFitting, SupportKind } from '../types/piping';
+import { SerializedGraphState, FieldWeldKind, Component, ComponentType, NippleEndFinish, Port, SpecFitting, SupportKind } from '../types/piping';
 import { PcfImporter } from '../core/importers/PcfImporter';
 import { RoutePlan, planConnectionRoutes } from '../core/routing/connectRoutes';
 import { applySlope, centerlineForElevation, deflect, elbowForBend, planOffset, trimmedTakeOff } from '../core/routing/routeMath';
@@ -164,6 +166,18 @@ export interface PipingState {
   selectPortAndAlign: (portId: string) => void;
   cycleOpenPort: () => void;
   rotateSelectedComponent: (angleDeg?: number) => void;
+  /** Da vuelta la pieza elegida: cara de la brida, sentido de la válvula o plano de la excéntrica */
+  flipSelectedComponent: () => void;
+  /** Cambia el diámetro de todo el tramo de la pieza elegida, sin mover los ejes */
+  changeRunDiameter: (newNd: number) => void;
+  /** Purga (hacia abajo) o venteo (hacia arriba) de un toque: olet + niple + válvula + niple + tapa */
+  addDrainOrVent: (componentId: string, offsetMm: number, kind: 'purga' | 'venteo') => void;
+  /** Largo hasta alinear: esperando que se toque la boca o la pieza de referencia */
+  alignPicking: boolean;
+  startAlignPicking: () => void;
+  pickAlignTarget: (point: THREE.Vector3) => void;
+  /** Traza los tramos a 90° que llevan la boca activa hasta una coordenada del modelo */
+  goToCoordinate: (target: THREE.Vector3) => void;
   updateSelectedPipeLength: (newLengthMm: number) => void;
   updatePipeEndFinishes: (componentId: string, endFinish1: NippleEndFinish, endFinish2: NippleEndFinish) => void;
   setFieldWeld: (jointId: string, kind: FieldWeldKind | null, allowanceMm?: number) => void;
@@ -184,7 +198,23 @@ export interface PipingState {
   applyRouting: () => void;
   insertFitting: (
     type: ComponentType,
-    options?: { angle?: number; branchDir?: THREE.Vector3; targetNd?: number; continueOnBranch?: boolean }
+    options?: {
+      angle?: number;
+      branchDir?: THREE.Vector3;
+      targetNd?: number;
+      continueOnBranch?: boolean;
+      /** Brida: armar la unión completa (brida + junta + brida) */
+      pair?: boolean;
+      /** Brida ciega */
+      blind?: boolean;
+      /** Familia de la spec elegida en la paleta */
+      familyId?: string;
+      eccentric?: boolean;
+      /** Reducción excéntrica: lado de la generatriz recta */
+      flat?: 'abajo' | 'arriba';
+      /** Te reducida: diámetro del ramal */
+      branchNd?: number;
+    }
   ) => void;
   undo: () => void;
   redo: () => void;
@@ -291,6 +321,35 @@ export const usePipingStore = create<PipingState>((set, get) => {
     pressureClass: port?.pressureClass
   });
 
+  const formatSize = (nd: number) => get().specReader?.catalog.sizeLabel(nd) ?? `${nd}"`;
+
+  /**
+   * Reducciones de la spec para pasar de un diámetro a otro: la directa o, si no existe, dos
+   * encadenadas por un diámetro intermedio. Se prefiere la concéntrica.
+   */
+  const reducerSteps = (from: number, to: number, port?: Port | null): { from: number; to: number; spec: SpecFitting }[] => {
+    const { specReader, specCode } = get();
+    if (!specReader) return [];
+    const find = (a: number, b: number) => {
+      const spec = specReader.findReducer(a, b, specCode, findOpts(port));
+      return spec && spec.faceToFace ? spec : null;
+    };
+    const direct = find(from, to);
+    if (direct) return [{ from, to, spec: direct }];
+    const lo = Math.min(from, to);
+    const hi = Math.max(from, to);
+    const middles = specReader
+      .getAvailableNominalDiameters()
+      .filter((m) => m > lo + 1e-6 && m < hi - 1e-6)
+      .sort((a, b) => Math.abs(a - to) - Math.abs(b - to));
+    for (const mid of middles) {
+      const first = find(from, mid);
+      const second = first ? find(mid, to) : null;
+      if (first && second) return [{ from, to: mid, spec: first }, { from: mid, to, spec: second }];
+    }
+    return [];
+  };
+
   /** Aviso cuando la ubicación de puertos de la pieza no está verificada contra Plant */
   const geomWarn = (spec?: SpecFitting | null) =>
     spec?.geometryConfidence === 'approximate'
@@ -369,6 +428,7 @@ export const usePipingStore = create<PipingState>((set, get) => {
     sectionBox: null,
     turnAngleDeg: null,
     slopePct: 0,
+    alignPicking: false,
     routeAxis: null,
     pieceMenu: null,
     multiMode: false,
@@ -757,6 +817,208 @@ export const usePipingStore = create<PipingState>((set, get) => {
       }
     },
 
+    changeRunDiameter: (newNd) => {
+      const { graph, specReader, selectedComponentId, selectedPortId } = get();
+      const comp = selectedComponentId ? graph.components.get(selectedComponentId) : null;
+      if (!specReader || !comp) return set({ statusMessage: 'Cambiar diámetro: elegí primero una pieza del tramo.' });
+      pushUndoSnapshot();
+      try {
+        const res = resizeRun(graph, specReader, comp.id, newNd);
+        saveGraphToIndexedDb(graph.serialize());
+        const active = selectedPortId ? graph.ports.get(selectedPortId) : null;
+        set({
+          nominalDiameter: active ? active.nominalDiameter : get().nominalDiameter,
+          collidingComponentIds: detectPipingCollisions(graph).collidingComponentIds,
+          version: get().version + 1,
+          statusMessage:
+            `Tramo pasado de ${formatSize(res.from)} a ${formatSize(res.to)}: ${res.changed} pieza${res.changed > 1 ? 's' : ''} cambiada${res.changed > 1 ? 's' : ''}; los ejes no se movieron.` +
+            (res.notes.length ? ` ⚠ ${res.notes.join(' ')}` : '')
+        });
+      } catch (e) {
+        // El cambio se calcula entero antes de tocar el modelo; por las dudas se vuelve al estado anterior
+        get().undo();
+        redoSnapshots.pop();
+        set({ canRedo: redoSnapshots.length > 0, statusMessage: `Cambiar diámetro: ${(e as Error).message}` });
+      }
+    },
+
+    addDrainOrVent: (componentId, offsetMm, kind) => {
+      const { graph, specReader } = get();
+      const pipe = graph.components.get(componentId);
+      if (!specReader || !pipe || pipe.type !== 'PIPE' || pipe.ports.length < 2) return;
+      const label = kind === 'purga' ? 'Purga' : 'Venteo';
+      const headerNd = pipe.parameters.nominalDiameter;
+      const sizes = specReader.getAvailableNominalDiameters().filter((n) => n < headerNd - 1e-6);
+      const hasOlet = (n: number) => !!specReader.findFitting({ partType: 'OLET', nominalDiameter: headerNd, reducedNominalDiameter: n });
+      const preferred = [0.75, 1, 0.5, 1.5, 2].filter((n) => sizes.some((s) => Math.abs(s - n) < 1e-6));
+      const branchNd = preferred.find(hasOlet) ?? preferred[0] ?? sizes[0];
+      if (branchNd === undefined) {
+        set({ statusMessage: `${label}: la spec no tiene un diámetro más chico que ${formatSize(headerNd)} para el ramal.` });
+        return;
+      }
+      const axis = pipe.ports[1].position.clone().sub(pipe.ports[0].position).normalize();
+      const vertical = Math.abs(axis.z) > 0.9;
+      const dir = vertical ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 0, kind === 'purga' ? -1 : 1);
+
+      const undoBefore = undoSnapshots.length;
+      const keepNumpad = get().numpadValue;
+      const keepNd = get().nominalDiameter;
+      const count = () => get().graph.components.size;
+      const rollback = (why: string) => {
+        if (undoSnapshots.length > undoBefore) {
+          undoSnapshots.length = undoBefore + 1;
+          get().undo();
+          redoSnapshots.pop();
+        }
+        set({ canRedo: redoSnapshots.length > 0, numpadValue: keepNumpad, nominalDiameter: keepNd, statusMessage: `${label}: no se pudo armar. ${why}` });
+      };
+      /** Un paso del armado; devuelve false si no agregó nada */
+      const step = (fn: () => void) => {
+        const before = count();
+        fn();
+        return count() > before;
+      };
+      const nipple = (mm: number) =>
+        step(() => {
+          set({ numpadValue: String(mm) });
+          get().insertFitting('PIPE');
+        });
+
+      connectExecuting = true;
+      try {
+        if (!step(() => get().addBranchOnPipe(componentId, offsetMm, dir, branchNd))) return;
+        if (!nipple(100)) return rollback(get().statusMessage);
+
+        // Válvula que entre directo en el niple (socket o a tope); si no hay, la que elija la spec
+        const nipplePort = get().selectedPortId ? get().graph.ports.get(get().selectedPortId!) : null;
+        const families = specReader.listFamilies('VALVE', branchNd);
+        const score = (fam: (typeof families)[number]) => {
+          const end = (fam.endTypes[0] || '').toUpperCase();
+          const kindOrder = ['gate', 'ball', 'globe', 'plug'].indexOf(valveKindFrom(fam.familyDesc));
+          const face = ['FL', 'LFL', 'WF', 'LUG'].includes(end);
+          const fits =
+            nipplePort && end
+              ? get().graph.resolveJoint({ ...nipplePort, plantEndType: end, endType: nipplePort.endType } as Port, nipplePort).problems.length === 0
+              : true;
+          return (face ? 50 : 0) + (fits ? 0 : 100) + (end === 'SW' ? 0 : 5) + (kindOrder < 0 ? 9 : kindOrder);
+        };
+        const family = [...families].sort((a, b) => score(a) - score(b))[0];
+        if (!step(() => get().insertFitting('VALVE', family ? { familyId: family.familyId } : undefined))) return rollback(get().statusMessage);
+
+        // Cierre: brida ciega si quedó una cara, o niple con tapa
+        const out = get().selectedPortId ? get().graph.ports.get(get().selectedPortId!) : null;
+        let closed: string;
+        if (out && isFaceEnd(out)) {
+          closed = step(() => get().insertFitting('FLANGE', { blind: true })) ? 'brida ciega' : '';
+        } else {
+          closed = nipple(75) && step(() => get().insertFitting('CAP')) ? 'niple con tapa' : '';
+        }
+
+        undoSnapshots.length = undoBefore + 1;
+        const where = vertical ? 'hacia +X (el caño es vertical)' : kind === 'purga' ? 'hacia abajo' : 'hacia arriba';
+        set({
+          numpadValue: keepNumpad,
+          nominalDiameter: keepNd,
+          canUndo: true,
+          selectedPortId: closed ? null : get().selectedPortId,
+          statusMessage: closed
+            ? `${label} de ${formatSize(branchNd)} ${where}: derivación, niple, válvula y ${closed}.`
+            : `${label} de ${formatSize(branchNd)} ${where}: derivación, niple y válvula. ⚠ La spec no tiene con qué cerrarla: quedó la boca abierta.`
+        });
+      } finally {
+        connectExecuting = false;
+      }
+    },
+
+    startAlignPicking: () => {
+      const { graph, selectedPortId, alignPicking } = get();
+      if (alignPicking) return set({ alignPicking: false, statusMessage: 'Alinear: cancelado.' });
+      const port = selectedPortId ? graph.ports.get(selectedPortId) : null;
+      if (!port || port.connectedJointId) {
+        set({ statusMessage: 'Alinear: primero tocá la boca libre desde la que sale la línea.' });
+        return;
+      }
+      if (get().connectPicking || get().connectRoutes.length) get().cancelConnect();
+      set({ alignPicking: true, statusMessage: 'Alinear: tocá la boca o la pieza con la que tiene que quedar alineado el tramo.' });
+    },
+
+    pickAlignTarget: (point) => {
+      const { graph, selectedPortId, activeDirection } = get();
+      const port = selectedPortId ? graph.ports.get(selectedPortId) : null;
+      if (!port || port.connectedJointId) return set({ alignPicking: false, statusMessage: 'Alinear: no hay una boca activa libre.' });
+      const dir = activeDirection.clone().normalize();
+      const dist = point.clone().sub(port.position).dot(dir);
+      const axisName = (['X', 'Y', 'Z'] as const).find((_, i) => Math.abs(dir.getComponent(i)) > 0.99);
+      const along = axisName ? `${dir.getComponent(['X', 'Y', 'Z'].indexOf(axisName)) > 0 ? '+' : '−'}${axisName}` : 'la dirección elegida';
+      if (dist < 1) {
+        set({
+          alignPicking: false,
+          statusMessage:
+            dist > -1
+              ? `Alinear: la boca ya está alineada con esa referencia en ${along}.`
+              : `Alinear: esa referencia queda ${Math.round(-dist)} mm hacia atrás en ${along}. Elegí la otra dirección y probá de nuevo.`
+        });
+        return;
+      }
+      set({
+        alignPicking: false,
+        numpadValue: String(Math.round(dist * 10) / 10),
+        statusMessage: `Alinear: ${Math.round(dist)} mm en ${along} para quedar alineado con la referencia. Tocá TRAZAR.`
+      });
+    },
+
+    goToCoordinate: (target) => {
+      const { graph, selectedPortId } = get();
+      const port = selectedPortId ? graph.ports.get(selectedPortId) : null;
+      if (!port || port.connectedJointId) {
+        set({ statusMessage: 'Ir a coordenada: primero tocá la boca libre desde la que sale la línea.' });
+        return;
+      }
+      if (![target.x, target.y, target.z].every(Number.isFinite)) return set({ statusMessage: 'Ir a coordenada: faltan valores de X, Y o Z.' });
+      const delta = target.clone().sub(port.position);
+      if (delta.length() < 1) return set({ statusMessage: 'Ir a coordenada: la boca ya está en ese punto.' });
+      const names = ['X', 'Y', 'Z'];
+      const own = [0, 1, 2].find((i) => Math.abs(port.direction.getComponent(i)) > 0.999);
+      if (own === undefined) {
+        set({ statusMessage: 'Ir a coordenada: la boca sale en diagonal o con pendiente. Trazá primero un tramo sobre un eje.' });
+        return;
+      }
+      const sign = Math.sign(port.direction.getComponent(own));
+      const ahead = delta.getComponent(own) * sign;
+      if (ahead < -1) {
+        set({
+          statusMessage: `Ir a coordenada: el punto queda ${Math.round(-ahead)} mm hacia atrás de la boca en ${names[own]}. Salí primero hacia un costado.`
+        });
+        return;
+      }
+      const unit = (i: number, s: number) => new THREE.Vector3(i === 0 ? s : 0, i === 1 ? s : 0, i === 2 ? s : 0);
+      const legs: { dir: THREE.Vector3; length: number }[] = [];
+      if (ahead >= 1) legs.push({ dir: unit(own, sign), length: ahead });
+      [0, 1, 2]
+        .filter((i) => i !== own && Math.abs(delta.getComponent(i)) >= 1)
+        .sort((a, b) => Math.abs(delta.getComponent(b)) - Math.abs(delta.getComponent(a)))
+        .forEach((i) => legs.push({ dir: unit(i, Math.sign(delta.getComponent(i))), length: Math.abs(delta.getComponent(i)) }));
+      set({ nominalDiameter: port.nominalDiameter });
+      const failed = traceLegs(legs);
+      if (failed) return set({ statusMessage: `Ir a coordenada: no se pudo armar. ${failed}` });
+      const end = get().selectedPortId ? get().graph.ports.get(get().selectedPortId!) : null;
+      const miss = end ? end.position.distanceTo(target) : 0;
+      if (miss > 2) {
+        // No se llega exacto: no dejar una línea que termina en otro lado
+        get().undo();
+        redoSnapshots.pop();
+        set({
+          canRedo: redoSnapshots.length > 0,
+          statusMessage: `Ir a coordenada: desde esta boca no se llega exacto (quedaría a ${Math.round(miss)} mm, por el codo de salida). Trazá antes un tramo recto y probá de nuevo.`
+        });
+        return;
+      }
+      set({
+        routeAxis: null,
+        statusMessage: `Línea llevada a X ${Math.round(target.x)} · Y ${Math.round(target.y)} · Z ${Math.round(target.z)} en ${legs.length} tramo${legs.length > 1 ? 's' : ''}.`
+      });
+    },
+
     addSupportOnPipe: (componentId, offsetMm, kind) => {
       const { graph } = get();
       pushUndoSnapshot();
@@ -784,7 +1046,7 @@ export const usePipingStore = create<PipingState>((set, get) => {
     },
 
     setNominalDiameter: (nd) => {
-      const { graph, specReader, selectedPortId, specCode } = get();
+      const { graph, specReader, selectedPortId } = get();
       if (!specReader) return;
 
       if (selectedPortId) {
@@ -792,25 +1054,36 @@ export const usePipingStore = create<PipingState>((set, get) => {
         // Cambio de diámetro en ruta: reducción (o ampliación) de la spec en la boca activa
         const portNd = port?.nominalDiameter ?? nd;
         if (port && !port.connectedJointId && Math.abs(nd - portNd) > 1e-6) {
-          const reducerSpec = specReader.findReducer(portNd, nd, specCode, findOpts(port));
-          if (reducerSpec && reducerSpec.faceToFace) {
+          const steps = reducerSteps(portNd, nd, port);
+          if (steps.length) {
             pushUndoSnapshot();
             const start = flangeOffFaceIfNeeded(port);
-            const comp = graph.addReducer(start.port, reducerSpec, nd > portNd);
+            let current = start.port;
+            let last: Component | null = null;
+            const notes: string[] = [];
+            for (const step of steps) {
+              last = graph.addReducer(current, step.spec, step.to > step.from);
+              current = last.ports[1];
+              const eccentric = (step.spec.lateralOffset ?? 0) > 0.01;
+              notes.push(
+                `${formatSize(step.from)} a ${formatSize(step.to)}${eccentric ? ' excéntrica (la spec no tiene concéntrica en esa medida)' : ''}`
+              );
+            }
             saveGraphToIndexedDb(graph.serialize());
             set({
-              selectedPortId: comp.ports[1].id,
-              selectedComponentId: comp.id,
-              activeDirection: comp.ports[1].direction.clone().normalize(),
+              selectedPortId: current.id,
+              selectedComponentId: last!.id,
+              activeDirection: current.direction.clone().normalize(),
               nominalDiameter: nd,
+              collidingComponentIds: detectPipingCollisions(graph).collidingComponentIds,
               version: get().version + 1,
-              statusMessage: `${reducerSpec.shortDescription} insertada (${reducerSpec.faceToFace.toFixed(1)} mm).${start.note}${geomWarn(reducerSpec)}`
+              statusMessage: `${steps.length > 1 ? 'Reducciones' : nd > portNd ? 'Ampliación' : 'Reducción'} ${notes.join(' y ')}.${start.note}${geomWarn(steps[0].spec)}`
             });
             return;
           }
           set({
             nominalDiameter: nd,
-            statusMessage: `Diámetro ${nd}": la spec no tiene reducción desde ${portNd}", así que la boca activa sigue en ${portNd}".`
+            statusMessage: `La spec no tiene reducción entre ${formatSize(portNd)} y ${formatSize(nd)}: la boca activa sigue en ${formatSize(portNd)}.`
           });
           return;
         }
@@ -930,14 +1203,15 @@ export const usePipingStore = create<PipingState>((set, get) => {
       const targetId =
         selectedComponentId || (selectedPortId ? graph.ports.get(selectedPortId)?.componentId || null : null);
       if (!targetId) {
-        set({ statusMessage: 'Seleccione una Te o un Codo para rotarlo.' });
+        set({ statusMessage: 'Elegí una te, un codo o una válvula para girar.' });
         return;
       }
       try {
         pushUndoSnapshot();
         const updated = graph.rotateComponentAroundRun(targetId, angleDeg);
         if (!updated) {
-          set({ statusMessage: 'Este componente no admite rotación axial libre.' });
+          undoSnapshots.pop();
+          set({ canUndo: undoSnapshots.length > 0, statusMessage: 'Esta pieza no se puede girar sobre el caño.' });
           return;
         }
         saveGraphToIndexedDb(graph.serialize());
@@ -947,11 +1221,46 @@ export const usePipingStore = create<PipingState>((set, get) => {
           activeDirection: activePort ? activePort.direction.clone().normalize() : get().activeDirection,
           collidingComponentIds: collisions.collidingComponentIds,
           version: get().version + 1,
-          statusMessage: `${updated.type === 'TEE' ? 'Ramal de Te' : 'Codo'} girado ${angleDeg}° alrededor del eje.`
+          statusMessage:
+            updated.type === 'VALVE'
+              ? `Volante girado ${angleDeg}°: ahora queda a ${Math.round(updated.parameters.stemAngle ?? 0)}° de la vertical.`
+              : `${updated.type === 'TEE' ? 'Ramal de te' : 'Codo'} girado ${angleDeg}° alrededor del caño.`
         });
       } catch (e: unknown) {
         set({ statusMessage: (e as Error).message });
       }
+    },
+
+    flipSelectedComponent: () => {
+      const { graph, selectedComponentId, selectedPortId } = get();
+      const comp = selectedComponentId ? graph.components.get(selectedComponentId) : null;
+      const kind = comp ? graph.flipKind(comp.id) : null;
+      if (!comp || !kind) {
+        set({ statusMessage: 'Se pueden dar vuelta bridas, válvulas y reducciones excéntricas.' });
+        return;
+      }
+      if (kind === 'reducer' && graph.closesLoopThrough(comp.id, comp.ports[1].id)) {
+        set({ statusMessage: 'No se puede dar vuelta: la línea cierra un circuito y la salida de la reducción se corre.' });
+        return;
+      }
+      pushUndoSnapshot();
+      const res = graph.flipComponent(comp.id);
+      if (!res) return;
+      saveGraphToIndexedDb(graph.serialize());
+      const active = selectedPortId ? graph.ports.get(selectedPortId) : null;
+      const warn = res.problems.length ? ` ⚠ ${res.problems[0]}` : '';
+      const message =
+        kind === 'flange'
+          ? 'Brida dada vuelta: la cara quedó del otro lado.'
+          : kind === 'valve'
+            ? 'Válvula invertida: cambió el sentido de flujo.'
+            : `Excéntrica con el plano hacia ${graph.reducerFlatSide(comp.id) ?? 'el otro lado'}; lo conectado a la salida se corrió.`;
+      set({
+        activeDirection: active ? active.direction.clone().normalize() : get().activeDirection,
+        collidingComponentIds: detectPipingCollisions(graph).collidingComponentIds,
+        version: get().version + 1,
+        statusMessage: message + warn
+      });
     },
 
     updateSelectedPipeLength: (newLengthMm: number) => {
@@ -1115,6 +1424,7 @@ export const usePipingStore = create<PipingState>((set, get) => {
           graph: importedGraph,
           lineNumber: lineReference,
           selectedPortId: lastPort ? lastPort.id : null,
+        nominalDiameter: lastPort ? lastPort.nominalDiameter : get().nominalDiameter,
           selectedComponentId: lastPort ? lastPort.componentId : null,
           activeDirection: lastPort ? lastPort.direction.clone().normalize() : new THREE.Vector3(1, 0, 0),
           collidingComponentIds: collisions.collidingComponentIds,
@@ -1209,6 +1519,12 @@ export const usePipingStore = create<PipingState>((set, get) => {
 
       // Regla de niple mínimo: no permitir tramos rectos menores a max(50 mm, 2 * OD)
       const minNipple = Math.max(50, 2 * pipeSpec.outerDiameter);
+
+      // Sin boca activa (se tocó el fondo) no se elige una por el usuario
+      if (!selectedPortId && graph.components.size > 0) {
+        set({ statusMessage: 'Tocá una boca libre para seguir trazando desde ahí.' });
+        return;
+      }
 
       // Determinar puerto de inicio (prioridad estricta al puerto activo seleccionado)
       let connectingPort = selectedPortId ? graph.ports.get(selectedPortId) : null;
@@ -1690,6 +2006,7 @@ export const usePipingStore = create<PipingState>((set, get) => {
 
       set({
         selectedPortId: lastPort ? lastPort.id : null,
+        nominalDiameter: lastPort ? lastPort.nominalDiameter : get().nominalDiameter,
         selectedComponentId: lastPort ? lastPort.componentId : null,
         activeDirection: lastPort ? lastPort.direction.clone().normalize() : new THREE.Vector3(1, 0, 0),
         version: get().version + 1,
@@ -1718,6 +2035,7 @@ export const usePipingStore = create<PipingState>((set, get) => {
 
       set({
         selectedPortId: lastPort ? lastPort.id : null,
+        nominalDiameter: lastPort ? lastPort.nominalDiameter : get().nominalDiameter,
         selectedComponentId: lastPort ? lastPort.componentId : null,
         activeDirection: lastPort ? lastPort.direction.clone().normalize() : new THREE.Vector3(1, 0, 0),
         version: get().version + 1,
@@ -1752,7 +2070,18 @@ export const usePipingStore = create<PipingState>((set, get) => {
       const { graph, specReader, selectedPortId, nominalDiameter, specCode, activeDirection, numpadValue } = get();
       if (!specReader) return;
 
+      // Sin boca activa (se tocó el fondo) no se elige una por el usuario
+      if (!selectedPortId && graph.components.size > 0) {
+        set({ statusMessage: 'Tocá una boca libre para poner la pieza ahí.' });
+        return;
+      }
+
       // Determinar puerto de conexión activo
+      if (type === 'OLET') {
+        set({ statusMessage: 'El olet va sobre un caño: mantené apretado el caño (o clic derecho) y elegí Derivar.' });
+        return;
+      }
+
       let port = selectedPortId ? graph.ports.get(selectedPortId) : null;
       if (!port || port.connectedJointId) {
         const openPorts = graph.getOpenPorts();
@@ -1768,7 +2097,14 @@ export const usePipingStore = create<PipingState>((set, get) => {
 
       // Caños y accesorios soldados no se atornillan a una cara: primero la brida de la spec
       let autoNote = '';
-      if (type === 'PIPE' || type === 'ELBOW' || type === 'TEE' || type === 'REDUCER' || type === 'CAP') {
+      // Familia elegida en la paleta: manda sobre las prioridades de la spec
+      const pick = (p: Port) => ({ ...findOpts(p), familyId: options?.familyId });
+      const fail = (message: string) => {
+        undoSnapshots.pop();
+        set({ canUndo: undoSnapshots.length > 0, statusMessage: message });
+      };
+
+      if (type === 'PIPE' || type === 'ELBOW' || type === 'TEE' || type === 'REDUCER' || type === 'CAP' || type === 'COUPLING') {
         const res = flangeOffFaceIfNeeded(port);
         port = res.port;
         autoNote = res.note;
@@ -1799,9 +2135,9 @@ export const usePipingStore = create<PipingState>((set, get) => {
 
       if (type === 'ELBOW') {
         const angle = options?.angle || 90;
-        const elbowSpec = specReader.findElbow(port.nominalDiameter || nominalDiameter, angle, specCode, findOpts(port));
+        const elbowSpec = specReader.findElbow(port.nominalDiameter || nominalDiameter, angle, specCode, pick(port));
         if (!elbowSpec) {
-          set({ statusMessage: `Codo de ${angle}° ND ${nominalDiameter}" no encontrado en catálogo.` });
+          set({ statusMessage: `La spec no tiene codo de ${angle}° en ${formatSize(port.nominalDiameter || nominalDiameter)}.` });
           return;
         }
         const takeOff = elbowSpec.takeOff || (elbowSpec.radius ? elbowSpec.radius * Math.tan((angle * Math.PI) / 360) : 76.2);
@@ -1846,64 +2182,99 @@ export const usePipingStore = create<PipingState>((set, get) => {
 
       if (type === 'FLANGE') {
         const nd = port.nominalDiameter || nominalDiameter;
-        const flgSpec = specReader.findFlange(nd, specCode, findOpts(port));
-        if (!flgSpec) {
-          set({ statusMessage: `La spec no tiene brida de ${nd}".` });
+        if (options?.blind) {
+          const blindSpec = specReader.catalog.find({
+            category: 'FLANGE_BLIND',
+            nominalDiameter: nd,
+            familyId: options.familyId,
+            pressureClass: port.pressureClass
+          });
+          if (!blindSpec) return fail(`La spec no tiene brida ciega de ${formatSize(nd)}.`);
+          const cls = port.pressureClass || blindSpec.pressureClass;
+          const mate = isFaceEnd(port) ? null : specReader.findFlange(nd, specCode, { ...findOpts(port), pressureClass: cls });
+          if (!isFaceEnd(port) && !mate) return fail(`La brida ciega va contra una brida y la spec no tiene brida de ${formatSize(nd)}.`);
+          const gasket = specReader.findGasket(nd, specCode, { pressureClass: cls });
+          const bolts = specReader.findBoltSet(nd, specCode, { pressureClass: cls });
+          const res = graph.addBlindFlange(port, blindSpec, { flangeSpec: mate, gasketSpec: gasket, boltSetSpec: bolts });
+          saveGraphToIndexedDb(graph.serialize());
+          const open = graph.getOpenPorts();
+          const nextPort = open.length > 0 ? open[open.length - 1] : null;
+          set({
+            selectedPortId: nextPort ? nextPort.id : null,
+            selectedComponentId: res.blind.id,
+            activeDirection: nextPort ? nextPort.direction.clone().normalize() : get().activeDirection,
+            collidingComponentIds: detectPipingCollisions(graph).collidingComponentIds,
+            version: get().version + 1,
+            statusMessage: `${blindSpec.shortDescription}${res.flange ? `, con ${mate?.familyDescription || 'su brida'} y junta` : ' con junta'}. La línea quedó cerrada.`
+          });
           return;
         }
+        const flgSpec = specReader.findFlange(nd, specCode, pick(port));
+        if (!flgSpec) return fail(`La spec no tiene brida de ${formatSize(nd)}.`);
         const gasketSpec = specReader.findGasket(nd, specCode, { pressureClass: port.pressureClass || flgSpec.pressureClass });
         const boltSetSpec = specReader.findBoltSet(nd, specCode, { pressureClass: port.pressureClass || flgSpec.pressureClass });
         const flg = graph.addFlange(port, flgSpec, gasketSpec, boltSetSpec);
+        // Par de bridas: la segunda va cara con cara, con junta y bulones
+        let outPort = flg.ports[1];
+        let pairNote = '';
+        if (options?.pair && isFaceEnd(outPort)) {
+          // La segunda es de la misma familia que la primera
+          outPort = graph.addFlange(outPort, flgSpec, gasketSpec, boltSetSpec).ports[1];
+          pairNote = ` + ${gasketSpec?.shortDescription || 'junta'} + segunda brida`;
+        }
         saveGraphToIndexedDb(graph.serialize());
         const collisions = detectPipingCollisions(graph);
         set({
-          selectedPortId: flg.ports[1].id,
+          selectedPortId: outPort.id,
           selectedComponentId: flg.id,
-          activeDirection: flg.ports[1].direction.clone().normalize(),
+          activeDirection: outPort.direction.clone().normalize(),
           collidingComponentIds: collisions.collidingComponentIds,
           version: get().version + 1,
-          statusMessage: `COMMAND: PLANTFITTINGADD • ${flgSpec.shortDescription}${isFaceEnd(port) ? ` + ${gasketSpec?.shortDescription || 'junta'}` : ''}.${geomWarn(flgSpec)}`
+          statusMessage: `${flgSpec.shortDescription}${isFaceEnd(port) ? ` + ${gasketSpec?.shortDescription || 'junta'}` : ''}${pairNote}.${geomWarn(flgSpec)}`
         });
         return;
       }
 
       if (type === 'VALVE') {
         const nd = port.nominalDiameter || nominalDiameter;
-        const valveSpec = specReader.findValve(nd, specCode, findOpts(port));
-        if (!valveSpec) {
-          set({ statusMessage: `La spec no tiene válvula de ${nd}".` });
-          return;
-        }
+        const valveSpec = specReader.findValve(nd, specCode, pick(port));
+        if (!valveSpec) return fail(`La spec no tiene válvula de ${formatSize(nd)}.`);
         const gasketSpec = specReader.findGasket(nd, specCode, { pressureClass: valveSpec.pressureClass });
         const boltSetSpec = specReader.findBoltSet(nd, specCode, { pressureClass: valveSpec.pressureClass });
-        // Válvula bridada sobre un caño o accesorio soldado: primero la brida (AutoFlange de Plant)
+        // Válvula de caras (bridada, wafer, lug): entra con sus bridas y juntas, como el AutoFlange de Plant
         const valveIsFlanged = isFaceEnd({ plantEndType: valveSpec.plantEndTypes?.[0], endType: valveSpec.endType });
-        if (valveIsFlanged && !isFaceEnd(port)) {
-          const flg = specReader.findFlange(nd, specCode, { connectToEndType: port.plantEndType, pressureClass: valveSpec.pressureClass });
-          if (flg) {
-            port = graph.addFlange(port, flg, gasketSpec, boltSetSpec).ports[1];
-            autoNote = ` + ${flg.familyDescription || 'brida'} automática.`;
-          }
+        const mateFlange = valveIsFlanged
+          ? specReader.findFlange(nd, specCode, {
+              connectToEndType: isFaceEnd(port) ? 'PL' : port.plantEndType ?? 'PL',
+              pressureClass: valveSpec.pressureClass
+            })
+          : null;
+        const assembly = graph.addValveAssembly(port, valveSpec, { flangeSpec: mateFlange, gasketSpec, boltSetSpec });
+        if (assembly.flanges.length) {
+          autoNote = ` Con ${assembly.flanges.length === 2 ? 'sus dos bridas' : 'su brida'} (${mateFlange?.familyDescription || 'brida'}) y juntas.`;
+        } else if (valveIsFlanged) {
+          autoNote = ' ⚠ La spec no tiene brida para esta válvula: quedó sin bridas.';
         }
-        const vlv = graph.addValve(port, valveSpec, gasketSpec, boltSetSpec);
+        const vlv = assembly.valve;
         saveGraphToIndexedDb(graph.serialize());
         const collisions = detectPipingCollisions(graph);
         set({
-          selectedPortId: vlv.ports[1].id,
+          selectedPortId: assembly.outPort.id,
           selectedComponentId: vlv.id,
-          activeDirection: vlv.ports[1].direction.clone().normalize(),
+          activeDirection: assembly.outPort.direction.clone().normalize(),
           collidingComponentIds: collisions.collidingComponentIds,
           version: get().version + 1,
-          statusMessage: `COMMAND: PLANTFITTINGADD • ${valveSpec.shortDescription}.${autoNote}${geomWarn(valveSpec)}`
+          statusMessage: `${valveSpec.shortDescription}.${autoNote}${geomWarn(valveSpec)}`
         });
         return;
       }
 
       if (type === 'TEE') {
-        const teeSpec = specReader.findTee(port.nominalDiameter || nominalDiameter, specCode, findOpts(port));
+        const teeSpec = specReader.findTee(port.nominalDiameter || nominalDiameter, specCode, { ...pick(port), branchDiameter: options?.branchNd });
         if (!teeSpec) {
-          set({ statusMessage: `Te ND ${nominalDiameter}" no encontrada en catálogo.` });
-          return;
+          return fail(
+            `La spec no tiene te${options?.branchNd ? ` con ramal de ${formatSize(options.branchNd)}` : ''} en ${formatSize(port.nominalDiameter || nominalDiameter)}.`
+          );
         }
         const uIn = port.direction.clone().normalize();
         let branchDir = options?.branchDir ? options.branchDir.clone() : activeDirection.clone().normalize();
@@ -1923,6 +2294,7 @@ export const usePipingStore = create<PipingState>((set, get) => {
           selectedPortId: targetPort.id,
           selectedComponentId: tee.id,
           activeDirection: targetPort.direction.clone().normalize(),
+          nominalDiameter: targetPort.nominalDiameter || get().nominalDiameter,
           collidingComponentIds: collisions.collidingComponentIds,
           version: get().version + 1,
           statusMessage: options?.continueOnBranch
@@ -1939,12 +2311,18 @@ export const usePipingStore = create<PipingState>((set, get) => {
           .flatMap((f) => f.secondarySizes)
           .sort((a, b) => b - a);
         const targetND = options?.targetNd || smaller[0];
-        const redSpec = targetND ? specReader.findReducer(nd, targetND, specCode, findOpts(port)) : null;
-        if (!redSpec) {
-          set({ statusMessage: `La spec no tiene reducción de ${nd}"${targetND ? ` a ${targetND}"` : ''}.` });
-          return;
-        }
-        const red = graph.addReducer(port, redSpec);
+        const found = targetND
+          ? specReader.findReducer(nd, targetND, specCode, { ...pick(port), eccentric: options?.eccentric })
+          : null;
+        // La pieza tiene que ser de esos dos diámetros (la búsqueda por familia no lo asegura)
+        const redSpec =
+          found &&
+          Math.abs(found.nominalDiameter - Math.max(nd, targetND)) < 1e-6 &&
+          Math.abs((found.reducedNominalDiameter ?? 0) - Math.min(nd, targetND)) < 1e-6
+            ? found
+            : null;
+        if (!redSpec) return fail(`La spec no tiene reducción de ${formatSize(nd)}${targetND ? ` a ${formatSize(targetND)}` : ''}.`);
+        const red = graph.addReducer(port, redSpec, targetND > nd, options?.flat === 'arriba');
         saveGraphToIndexedDb(graph.serialize());
         const collisions = detectPipingCollisions(graph);
         set({
@@ -1954,15 +2332,39 @@ export const usePipingStore = create<PipingState>((set, get) => {
           nominalDiameter: targetND,
           collidingComponentIds: collisions.collidingComponentIds,
           version: get().version + 1,
-          statusMessage: `COMMAND: PLANTFITTINGADD • ${redSpec.shortDescription}. Nuevo ND activo: ${targetND}".${autoNote}${geomWarn(redSpec)}`
+          statusMessage: `${targetND > nd ? 'Ampliación' : 'Reducción'}: ${redSpec.shortDescription}${
+            (redSpec.lateralOffset ?? 0) > 0.01 ? ` (plano ${options?.flat === 'arriba' ? 'arriba' : 'abajo'})` : ''
+          }. La línea sigue en ${formatSize(targetND)}.${autoNote}${geomWarn(redSpec)}`
+        });
+        return;
+      }
+
+      if (type === 'COUPLING') {
+        const nd = port.nominalDiameter || nominalDiameter;
+        const cplSpec = specReader.catalog.find({
+          category: 'COUPLING',
+          nominalDiameter: nd,
+          familyId: options?.familyId,
+          connectToEndType: port.plantEndType
+        });
+        if (!cplSpec) return fail(`La spec no tiene cupla de ${formatSize(nd)}.`);
+        const cpl = graph.addCoupling(port, cplSpec);
+        saveGraphToIndexedDb(graph.serialize());
+        set({
+          selectedPortId: cpl.ports[1].id,
+          selectedComponentId: cpl.id,
+          activeDirection: cpl.ports[1].direction.clone().normalize(),
+          collidingComponentIds: detectPipingCollisions(graph).collidingComponentIds,
+          version: get().version + 1,
+          statusMessage: `${cplSpec.shortDescription}.${autoNote}${geomWarn(cplSpec)}`
         });
         return;
       }
 
       if (type === 'CAP') {
-        const capSpec = specReader.findCap(port.nominalDiameter || nominalDiameter, specCode, findOpts(port));
+        const capSpec = specReader.findCap(port.nominalDiameter || nominalDiameter, specCode, pick(port));
         if (!capSpec) {
-          set({ statusMessage: `Tapa / Casquete ND ${nominalDiameter}" no encontrada en catálogo.` });
+          set({ statusMessage: `La spec no tiene tapa en ${formatSize(port.nominalDiameter || nominalDiameter)}.` });
           return;
         }
         const cap = graph.addCap(port, capSpec);

@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import * as THREE from 'three';
-import { ArrowUpDown, Check, ChevronLeft, ChevronRight, CornerUpRight, Keyboard, Link2, Repeat, Spline, TrendingDown, X } from 'lucide-react';
+import { ArrowUpDown, Check, ChevronLeft, ChevronRight, CornerUpRight, Keyboard, Link2, MapPin, Repeat, Spline, Target, TrendingDown, X } from 'lucide-react';
 import { planOffset } from '../core/routing/routeMath';
 import { usePipingStore } from '../store/usePipingStore';
 import { FloatingPalette } from './FloatingPalette';
@@ -9,7 +9,7 @@ import { usePhoneLayout, vibrate } from './useIsPhone';
 const PRESETS = ['250', '500', '1000', '1500', '3000', '6000'];
 const TURN_ANGLES = [15, 22.5, 30, 45, 60];
 const SLOPES = [0.5, 1, 2, 5];
-type Tool = 'angle' | 'slope' | 'offset' | 'elev';
+type Tool = 'angle' | 'slope' | 'offset' | 'elev' | 'coord';
 
 /** Ejes del compás de Plant: X Este, Y Norte, Z arriba */
 const AXES: { label: string; v: [number, number, number]; cls: string }[] = [
@@ -29,7 +29,9 @@ export const TouchNumpad: React.FC = () => {
   const [offsetAngle, setOffsetAngle] = useState(45);
   const [elevTarget, setElevTarget] = useState('');
   const [elevRef, setElevRef] = useState<'CL' | 'BOP' | 'TOP'>('BOP');
+  const [coord, setCoord] = useState<[string, string, string]>(['', '', '']);
   const phone = usePhoneLayout();
+  const alignPicking = usePipingStore((s) => s.alignPicking);
 
   const numpadValue = usePipingStore((s) => s.numpadValue);
   const setNumpadValue = usePipingStore((s) => s.setNumpadValue);
@@ -62,10 +64,34 @@ export const TouchNumpad: React.FC = () => {
   const activePort = selectedPortId ? graph.ports.get(selectedPortId) : undefined;
   const openPort = activePort && !activePort.connectedJointId ? activePort : undefined;
 
+  // Sin boca activa (se tocó el fondo) y con piezas en el modelo: hay que elegir desde dónde seguir
+  const openPorts = graph.getOpenPorts();
+  const needsPort = !openPort && graph.components.size > 0;
+
   const handleApply = () => {
     vibrate(25);
     applyRouting();
   };
+
+  const pickPortNotice = (
+    <div className="w-full flex items-center gap-2 p-2 rounded-lg bg-amber-500/10 border border-amber-400/50">
+      <span className="flex-1 min-w-0 text-xs text-amber-100 leading-snug">
+        {openPorts.length ? 'Tocá una boca libre del modelo para seguir desde ahí.' : 'No quedan bocas libres en el modelo.'}
+      </span>
+      {openPorts.length > 0 && (
+        <button
+          type="button"
+          onClick={() => {
+            vibrate();
+            usePipingStore.getState().setSelectedPortId(openPorts[openPorts.length - 1].id);
+          }}
+          className={`${phone ? 'h-10' : 'h-8'} px-3 rounded-lg bg-amber-500 border border-amber-200 text-black text-xs font-black shrink-0 active:scale-95`}
+        >
+          Última boca
+        </button>
+      )}
+    </div>
+  );
 
   const near = (a: THREE.Vector3, v: [number, number, number], tol: number) =>
     Math.abs(a.x - v[0]) < tol && Math.abs(a.y - v[1]) < tol && Math.abs(a.z - v[2]) < tol;
@@ -222,6 +248,19 @@ export const TouchNumpad: React.FC = () => {
         type="button"
         onClick={() => {
           vibrate();
+          usePipingStore.getState().startAlignPicking();
+        }}
+        className={`${chip} ${alignPicking ? 'bg-amber-500 text-black border-amber-200 animate-pulse' : 'bg-[#222630] text-amber-300 border-amber-500/50'}`}
+        title="Largo hasta alinear: tocá otra boca o pieza y el largo del tramo se calcula solo"
+        aria-pressed={alignPicking}
+      >
+        <Target size={14} />
+        <span>{alignPicking ? 'Tocá la referencia' : 'Alinear'}</span>
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          vibrate();
           cycleOpenPort();
         }}
         className={`${chip} bg-[#222630] text-emerald-300 border-emerald-500/40`}
@@ -268,8 +307,13 @@ export const TouchNumpad: React.FC = () => {
       onClick={() => {
         vibrate();
         setTool(tool === id ? null : id);
+        // Datos de la boca: los campos arrancan con la coordenada actual
+        if (id === 'coord' && tool !== id && openPort) {
+          setCoord([openPort.position.x, openPort.position.y, openPort.position.z].map((n) => String(Math.round(n * 10) / 10)) as [string, string, string]);
+        }
       }}
       aria-expanded={tool === id}
+      data-tool={id}
       className={`${chip} flex-1 min-w-0 justify-center !px-1 !gap-1 ${
         tool === id
           ? 'bg-amber-500 text-black border-amber-200'
@@ -290,6 +334,7 @@ export const TouchNumpad: React.FC = () => {
       {toolChip('slope', <TrendingDown size={14} />, slopePct === 0 ? 'Pend.' : `${slopePct > 0 ? '+' : '−'}${Math.abs(slopePct)}%`, slopePct !== 0)}
       {toolChip('offset', <Spline size={14} />, 'Desvío', false)}
       {toolChip('elev', <ArrowUpDown size={14} />, 'Elev.', false)}
+      {toolChip('coord', <MapPin size={14} />, 'Boca', false)}
     </div>
   );
 
@@ -451,6 +496,52 @@ export const TouchNumpad: React.FC = () => {
           </div>
         </>
       )}
+
+      {tool === 'coord' && (
+        <>
+          {openPort ? (
+            <div className="text-xs font-mono text-slate-200 leading-relaxed" data-port-info>
+              <span className="text-red-400">X {Math.round(openPort.position.x)}</span> · <span className="text-emerald-400">Y {Math.round(openPort.position.y)}</span> ·{' '}
+              <span className="text-sky-400">Z {Math.round(openPort.position.z)}</span>
+              <span className="text-slate-400">
+                {' '}
+                — {openPort.nominalDiameter}&quot; · eje {Math.round(openPort.position.z)}
+                {Math.abs(openPort.direction.z) < 0.9
+                  ? ` · fondo ${Math.round(openPort.position.z - openPort.outerDiameter / 2)} · lomo ${Math.round(openPort.position.z + openPort.outerDiameter / 2)}`
+                  : ' · boca vertical'}
+              </span>
+            </div>
+          ) : (
+            <div className={hint}>Tocá una boca libre para ver su coordenada y elevación.</div>
+          )}
+          <div className="flex items-center gap-1">
+            {(['X', 'Y', 'Z'] as const).map((name, i) => (
+              <input
+                key={name}
+                type="number"
+                inputMode="decimal"
+                value={coord[i]}
+                onChange={(e) => setCoord(coord.map((v, j) => (j === i ? e.target.value : v)) as [string, string, string])}
+                placeholder={name}
+                className={field}
+                aria-label={`Coordenada ${name} de destino en milímetros`}
+              />
+            ))}
+            <button
+              type="button"
+              className={go}
+              disabled={!openPort || coord.some((v) => v === '' || Number.isNaN(parseFloat(v)))}
+              onClick={() => {
+                vibrate();
+                usePipingStore.getState().goToCoordinate(new THREE.Vector3(parseFloat(coord[0]), parseFloat(coord[1]), parseFloat(coord[2])));
+              }}
+            >
+              IR
+            </button>
+          </div>
+          <div className={hint}>IR traza los tramos a 90° hasta esa coordenada (mm). Se deshace de un solo paso.</div>
+        </>
+      )}
     </div>
   );
 
@@ -495,6 +586,7 @@ export const TouchNumpad: React.FC = () => {
       bodyClassName="p-2.5 flex flex-col items-center gap-1.5 w-[92vw] max-w-[540px]"
       sheetBodyClassName="p-2 flex flex-col items-center gap-2 w-full"
     >
+      {needsPort && pickPortNotice}
       {axisRow}
       {connectChooser || lengthBar}
       {toolsRow}

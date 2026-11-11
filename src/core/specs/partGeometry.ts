@@ -1,3 +1,4 @@
+import { valveKindFrom } from './valveKind';
 import { CatalogPart } from './catalogTypes';
 import { GeometryConfidence, PartVisualDims } from '../../types/piping';
 
@@ -296,13 +297,22 @@ export function computePartGeometry(part: CatalogPart): PartGeometry {
   // ---------------------------------------------------------------- válvulas e instrumentos en línea
   if (part.category === 'VALVE' || part.category === 'INSTRUMENT') {
     const L = p(part, 'L') ?? part.extra.lengthMm ?? 3 * D;
-    const H = Math.max(pos(p(part, 'H1')) ?? 0, pos(p(part, 'H2')) ?? 0, D * 1.6);
-    const visual = {
+    // H1/H2: diámetro de las bridas (H11/H12 en las mariposas). HA: alto del accionamiento desde el eje.
+    const flangeOD = pos(p(part, 'H1')) ?? pos(p(part, 'H11'));
+    const H = Math.max(flangeOD ?? 0, pos(p(part, 'H2')) ?? 0, D * 1.6);
+    const actuatorName = (part.extra.valveActuator || '').toLowerCase();
+    const isValve = part.category === 'VALVE';
+    const visual: NonNullable<PartGeometry['visual']> = {
       bodyStart: 0,
       bodyEnd: L,
       bodyDiameter: H,
       flangeThickness: pos(p(part, 'B1')),
-      flangeOuterDiameter: pos(p(part, 'H1'))
+      flangeOuterDiameter: flangeOD,
+      actuatorHeight: pos(p(part, 'HA')),
+      actuatorDiameter: pos(p(part, 'DA')),
+      actuatorLength: pos(p(part, 'LA')),
+      actuator: actuatorName.includes('wheel') ? 'wheel' : actuatorName.includes('lever') ? 'lever' : isValve && !actuatorName ? 'none' : undefined,
+      valveKind: isValve ? valveKindFrom(part.familyDesc, part.template, part.skey) : undefined
     };
     if (t.endsWith('_OFOF')) {
       const I1 = p(part, 'I1') ?? 0;

@@ -206,7 +206,8 @@ export class PcfExporter {
       const token = isogen ? ` ${port.plantEndType ? plantEndToPcf(port.plantEndType) : port.endType === 'FLANG' ? 'FL' : port.endType === 'THD' ? 'SC' : port.endType}` : '';
       return `${IND}END-POINT ${point(pos)} ${formatBore(port.nominalDiameter, boreUnits)}${token}`;
     };
-    const out = [blockTypeForComponent(comp.type, eccentric)];
+    const blindFlange = comp.type === 'FLANGE' && p.length === 1;
+    const out = [blindFlange ? 'FLANGE-BLIND' : blockTypeForComponent(comp.type, eccentric)];
 
     switch (comp.type) {
       case 'PIPE':
@@ -242,6 +243,12 @@ export class PcfExporter {
         break;
       }
       default:
+        if (blindFlange) {
+          // Cara y espalda del disco, como la tapa
+          const back = comp.centerline[1] ?? p[0].position.clone().addScaledVector(p[0].direction, -(params.faceToFace || 20));
+          out.push(end(p[0]), end(p[0], back));
+          break;
+        }
         p.forEach((port) => out.push(end(port)));
         if (eccentric && p.length >= 2) {
           // FLAT-DIRECTION: lado donde quedan alineadas las generatrices (hacia donde se corre el extremo chico)
