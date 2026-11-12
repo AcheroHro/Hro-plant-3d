@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { Component } from '../../types/piping';
 import { PipingGraph } from '../../core/graph/PipingGraph';
+import { GridBox, overlappingPairs } from '../../core/spatial/spatialGrid';
 
 export interface CollisionResult {
   hasCollision: boolean;
@@ -108,42 +109,53 @@ export function detectPipingCollisions(graph: PipingGraph): CollisionResult {
   const collidingIds = new Set<string>();
   const details: CollisionResult['details'] = [];
 
-  for (let i = 0; i < components.length; i++) {
-    for (let j = i + 1; j < components.length; j++) {
-      const compA = components[i];
-      const compB = components[j];
+  // Solo se comparan los caños cuyas cajas (eje engordado por el radio) se tocan: grilla espacial
+  const boxes: GridBox[] = components.map((c) => {
+    const a = c.centerline[0];
+    const b = c.centerline[c.centerline.length - 1];
+    const r = (c.parameters.outerDiameter || 0) / 2;
+    return {
+      id: c.id,
+      min: [Math.min(a.x, b.x) - r, Math.min(a.y, b.y) - r, Math.min(a.z, b.z) - r],
+      max: [Math.max(a.x, b.x) + r, Math.max(a.y, b.y) + r, Math.max(a.z, b.z) + r]
+    };
+  });
 
-      // Si comparten una junta directa, están conectados y no constituyen colisión
-      if (areComponentsDirectlyConnected(compA, compB, graph)) {
-        continue;
-      }
-      // Dos caños a los lados del mismo accesorio (codo SW corto, tee) se acercan por geometría, no chocan
-      if (shareConnectedFitting(compA, compB, graph)) {
-        continue;
-      }
+  for (const [i, j] of overlappingPairs(boxes)) {
+    const compA = components[i];
+    const compB = components[j];
 
-      const odA = compA.parameters.outerDiameter;
-      const odB = compB.parameters.outerDiameter;
-      const minDistance = (odA + odB) / 2;
+    // Si comparten una junta directa, están conectados y no constituyen colisión
+    if (areComponentsDirectlyConnected(compA, compB, graph)) {
+      continue;
+    }
+    // Dos caños unidos por accesorios (codo SW corto, te, par de bridas SO, válvula con sus
+    // bridas) se acercan por la geometría de esas piezas, no chocan
+    if (joinedThroughFittings(compA, compB, graph)) {
+      continue;
+    }
 
-      // Calcular distancia mínima entre las líneas centrales
-      const dist = distanceBetweenSegments(
-        compA.centerline[0],
-        compA.centerline[compA.centerline.length - 1],
-        compB.centerline[0],
-        compB.centerline[compB.centerline.length - 1]
-      );
+    const odA = compA.parameters.outerDiameter;
+    const odB = compB.parameters.outerDiameter;
+    const minDistance = (odA + odB) / 2;
 
-      if (dist < minDistance - 1e-3) {
-        collidingIds.add(compA.id);
-        collidingIds.add(compB.id);
-        details.push({
-          componentAId: compA.id,
-          componentBId: compB.id,
-          distanceMm: dist,
-          minRequiredDistanceMm: minDistance
-        });
-      }
+    // Calcular distancia mínima entre las líneas centrales
+    const dist = distanceBetweenSegments(
+      compA.centerline[0],
+      compA.centerline[compA.centerline.length - 1],
+      compB.centerline[0],
+      compB.centerline[compB.centerline.length - 1]
+    );
+
+    if (dist < minDistance - 1e-3) {
+      collidingIds.add(compA.id);
+      collidingIds.add(compB.id);
+      details.push({
+        componentAId: compA.id,
+        componentBId: compB.id,
+        distanceMm: dist,
+        minRequiredDistanceMm: minDistance
+      });
     }
   }
 
@@ -165,10 +177,29 @@ function connectedComponentIds(comp: Component, graph: PipingGraph): Set<string>
   return ids;
 }
 
-function shareConnectedFitting(compA: Component, compB: Component, graph: PipingGraph): boolean {
-  const a = connectedComponentIds(compA, graph);
-  for (const id of connectedComponentIds(compB, graph)) {
-    if (a.has(id) && graph.components.get(id)?.type !== 'PIPE') return true;
+/** Accesorios seguidos que puede haber entre dos caños vecinos: brida, junta, válvula, junta, brida... */
+const MAX_FITTINGS_BETWEEN = 6;
+
+/**
+ * Si dos caños están unidos por una cadena corta de accesorios (sin otro caño en el medio).
+ * Por ejemplo caño, brida SO, brida SO, caño: las puntas quedan a pocos milímetros y alineadas,
+ * y eso es el armado normal, no un choque.
+ */
+function joinedThroughFittings(compA: Component, compB: Component, graph: PipingGraph): boolean {
+  const seen = new Set<string>([compA.id]);
+  let frontier = [compA];
+  for (let depth = 0; depth <= MAX_FITTINGS_BETWEEN && frontier.length; depth++) {
+    const next: Component[] = [];
+    for (const comp of frontier) {
+      for (const id of connectedComponentIds(comp, graph)) {
+        if (id === compB.id) return true;
+        if (seen.has(id)) continue;
+        seen.add(id);
+        const other = graph.components.get(id);
+        if (other && other.type !== 'PIPE') next.push(other);
+      }
+    }
+    frontier = next;
   }
   return false;
 }

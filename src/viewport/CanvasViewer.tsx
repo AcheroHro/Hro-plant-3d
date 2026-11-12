@@ -3,9 +3,11 @@ import * as THREE from 'three';
 import { usePipingStore, isolatedIds } from '../store/usePipingStore';
 import { ViewCube } from './ViewCube';
 import { usePhoneLayout } from '../ui/useIsPhone';
-import { createStudsGeometry } from './geometries/flangeGeometry';
-import { buildComponentObject, faceThicknessOf, PieceMaterials } from './buildComponentMesh';
+import { buildComponentObject } from './buildComponentMesh';
 import { disposeObject } from './geometries/geometryUtils';
+import { setPieceHidden, visibleBounds } from './meshBatches';
+import { IncrementalBatches } from './incrementalBatches';
+import { createModelMaterials, modelPieces, ModelMaterials } from './modelPieces';
 import { computeSpools } from '../core/spools/spoolEngine';
 import { SPOOL_COLORS, ERECTION_COLOR, FIELD_COLORS, FIELD_UNCHANGED_COLOR } from './spoolColors';
 import { useProjectStore } from '../store/useProjectStore';
@@ -81,6 +83,10 @@ export const CanvasViewer: React.FC = () => {
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const pipeGroupRef = useRef<THREE.Group | null>(null);
+  /** Mallas fusionadas del modelo, para apagar y prender piezas al elegirlas */
+  const batchesRef = useRef<THREE.Mesh[]>([]);
+  const incrementalRef = useRef<IncrementalBatches | null>(null);
+  const modelMaterialsRef = useRef<ModelMaterials | null>(null);
   const portsGroupRef = useRef<THREE.Group | null>(null);
   const cursorGroupRef = useRef<THREE.Group | null>(null);
   // Compás sobre la boca activa y manija de largo: se dibujan en píxeles y se reescalan en cada cuadro
@@ -352,7 +358,8 @@ export const CanvasViewer: React.FC = () => {
   // Función Encuadrar Todo (Zoom Extents)
   const executeFrameAll = () => {
     if (!cameraRef.current || !pipeGroupRef.current) return;
-    const box = new THREE.Box3().setFromObject(pipeGroupRef.current);
+    // Solo lo visible: en la malla fusionada una pieza borrada queda apagada hasta el reagrupado
+    const box = visibleBounds(pipeGroupRef.current);
     // Sin cañerías todavía: se encuadra la referencia de obra, si hay una a la vista
     if (box.isEmpty() && refGroupRef.current?.visible) box.setFromObject(refGroupRef.current);
     if (box.isEmpty()) {
@@ -424,124 +431,18 @@ export const CanvasViewer: React.FC = () => {
     updateCameraPosition();
   }, [connectRoutes, connectIndex]);
 
-  // Reconstrucción reactiva de mallas cuando cambia el grafo, selección o versión
+  // Reconstrucción reactiva del modelo. Solo se rearman las piezas cuya forma, posición o color
+  // cambió; el resto sigue en la malla fusionada que ya estaba (ver incrementalBatches.ts)
   useEffect(() => {
-    if (!pipeGroupRef.current || !portsGroupRef.current || !cursorGroupRef.current) return;
-
     const pipeGroup = pipeGroupRef.current;
-    const portsGroup = portsGroupRef.current;
-    // Limpieza de memoria GPU explícita
-    disposeObject(pipeGroup);
-    disposeObject(portsGroup);
-    while (pipeGroup.children.length > 0) pipeGroup.remove(pipeGroup.children[0]);
-    while (portsGroup.children.length > 0) portsGroup.remove(portsGroup.children[0]);
-
-    // Materiales técnicos estilo AutoCAD Plant 3D 2027 (DoubleSide para visibilidad total interior/exterior)
-    const pipeMaterial = new THREE.MeshStandardMaterial({
-      color: 0x829ab1,
-      roughness: 0.32,
-      metalness: 0.72,
-      side: THREE.DoubleSide
-    });
-
-    const fittingMaterial = new THREE.MeshStandardMaterial({
-      color: 0x4da8da,
-      roughness: 0.26,
-      metalness: 0.78,
-      side: THREE.DoubleSide
-    });
-
-    const teeMaterial = new THREE.MeshStandardMaterial({
-      color: 0x38bdf8,
-      roughness: 0.24,
-      metalness: 0.8,
-      side: THREE.DoubleSide
-    });
-
-    const flangeMaterial = new THREE.MeshStandardMaterial({
-      color: 0x94a3b8,
-      roughness: 0.24,
-      metalness: 0.85,
-      side: THREE.DoubleSide
-    });
-
-    const valveMaterial = new THREE.MeshStandardMaterial({
-      color: 0xef4444,
-      roughness: 0.35,
-      metalness: 0.65,
-      side: THREE.DoubleSide
-    });
-
-    // Volantes y palancas
-    const trimMaterial = new THREE.MeshStandardMaterial({ color: 0x1f2937, roughness: 0.5, metalness: 0.6, side: THREE.DoubleSide });
-    const studMaterial = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.45, metalness: 0.8 });
-    const pieceMaterials: PieceMaterials = {
-      pipe: pipeMaterial,
-      fitting: fittingMaterial,
-      tee: teeMaterial,
-      flange: flangeMaterial,
-      valve: valveMaterial,
-      trim: trimMaterial
-    };
-
-    const gasketBoltMaterial = new THREE.MeshStandardMaterial({
-      color: 0xf59e0b,
-      roughness: 0.3,
-      metalness: 0.85,
-      side: THREE.DoubleSide
-    });
-
-    const fieldWeldMaterial = new THREE.MeshStandardMaterial({ color: 0xf97316, emissive: 0x7c2d12, emissiveIntensity: 0.5, roughness: 0.4 });
-    const weldBeadMaterial = new THREE.MeshStandardMaterial({
-      color: 0xf97316,
-      roughness: 0.4,
-      metalness: 0.7,
-      side: THREE.DoubleSide
-    });
-
-    // Material de selección estilo AutoCAD Plant 3D (Cyan brillante con emisión)
-    const selectedMaterial = new THREE.MeshStandardMaterial({
-      color: 0x00f0ff,
-      emissive: 0x0284c7,
-      emissiveIntensity: 0.45,
-      roughness: 0.2,
-      metalness: 0.8,
-      side: THREE.DoubleSide
-    });
-
-    // Piezas de la selección múltiple (violeta)
-    const multiMaterial = new THREE.MeshStandardMaterial({
-      color: 0xa78bfa,
-      emissive: 0x5b21b6,
-      emissiveIntensity: 0.5,
-      roughness: 0.3,
-      metalness: 0.6,
-      side: THREE.DoubleSide
-    });
-    const multiIds = new Set(multiSelect);
-
-    // Material de colisión (rojo alerta)
-    const collisionMaterial = new THREE.MeshStandardMaterial({
-      color: 0xef4444,
-      emissive: 0x7f1d1d,
-      emissiveIntensity: 0.35,
-      roughness: 0.3,
-      metalness: 0.8,
-      side: THREE.DoubleSide
-    });
-
-    // Helper para etiquetar mallas con componentId para selección 3D por clic/tap
-    const tagComponentMesh = (obj: THREE.Object3D, compId: string) => {
-      obj.userData = { ...obj.userData, componentId: compId };
-      obj.traverse((child) => {
-        child.userData = { ...child.userData, componentId: compId };
-      });
-    };
+    if (!pipeGroup) return;
+    if (!modelMaterialsRef.current) modelMaterialsRef.current = createModelMaterials();
+    if (!incrementalRef.current) incrementalRef.current = new IncrementalBatches();
+    const materials = modelMaterialsRef.current;
 
     // Vista por spools: un color por spool y gris para el material de montaje
     const spoolResult = spoolView ? computeSpools(graph) : null;
     const spoolColorIndex = new Map(spoolResult?.spools.map((sp) => [sp.id, sp.colorIndex]) ?? []);
-    const spoolMats = new Map<number, THREE.Material>();
     // Vista de campo: lo que cambió respecto del PCF de Plant, por color
     const fieldColor = new Map<string, number>();
     if (fieldView && fieldBaseline) {
@@ -553,138 +454,100 @@ export const CanvasViewer: React.FC = () => {
         }
       }
     }
-    const spoolMaterial = (compId: string): THREE.Material | null => {
-      if (fieldView && fieldBaseline) {
-        const color = fieldColor.get(compId) ?? FIELD_UNCHANGED_COLOR;
-        let m = spoolMats.get(color);
-        if (!m) {
-          m = new THREE.MeshStandardMaterial({ color, roughness: 0.45, metalness: 0.3, side: THREE.DoubleSide });
-          spoolMats.set(color, m);
-        }
-        return m;
-      }
+    const colorOf = (compId: string): number | null => {
+      if (fieldView && fieldBaseline) return fieldColor.get(compId) ?? FIELD_UNCHANGED_COLOR;
       if (!spoolResult) return null;
       const sid = spoolResult.spoolOf.get(compId);
-      const color = sid ? SPOOL_COLORS[(spoolColorIndex.get(sid) ?? 0) % SPOOL_COLORS.length] : ERECTION_COLOR;
-      let m = spoolMats.get(color);
-      if (!m) {
-        m = new THREE.MeshStandardMaterial({ color, roughness: 0.45, metalness: 0.3, side: THREE.DoubleSide });
-        spoolMats.set(color, m);
-      }
-      return m;
+      return sid ? SPOOL_COLORS[(spoolColorIndex.get(sid) ?? 0) % SPOOL_COLORS.length] : ERECTION_COLOR;
     };
 
-    // Con una línea aislada, lo demás no se dibuja (ni se puede tocar)
+    const specs = modelPieces(graph, {
+      materials,
+      // Con una línea aislada, lo demás no se dibuja (ni se puede tocar)
+      visibleIds: isolatedIds(graph, isolation),
+      colliding: collidingComponentIds,
+      colorOf
+    });
+    const { batches, rest } = incrementalRef.current.update(specs);
+    // Lo que sale de la escena no se libera acá: son mallas guardadas o ya liberadas por update()
+    pipeGroup.clear();
+    for (const obj of [...batches, ...rest]) pipeGroup.add(obj);
+    batchesRef.current = batches;
+  }, [graph, version, collidingComponentIds, spoolView, fieldView, fieldBaseline, isolation]);
+
+  // Al cerrar el visor se sueltan las mallas guardadas y los materiales del modelo
+  useEffect(
+    () => () => {
+      incrementalRef.current?.dispose();
+      incrementalRef.current = null;
+      modelMaterialsRef.current?.dispose();
+      modelMaterialsRef.current = null;
+    },
+    []
+  );
+
+  // Pieza elegida y selección múltiple: se apagan sus triángulos en las mallas fusionadas y se
+  // dibujan aparte con el color de selección. Elegir otra pieza no rearma el modelo.
+  useEffect(() => {
+    const pipeGroup = pipeGroupRef.current;
+    if (!pipeGroup) return;
+    const batches = batchesRef.current;
     const visibleIds = isolatedIds(graph, isolation);
 
-    // 1. Construir geometrías para cada componente
-    for (const comp of graph.components.values()) {
-      if (visibleIds && !visibleIds.has(comp.id)) continue;
-      const isColliding = collidingComponentIds.has(comp.id);
-      const isSelected = multiMode ? false : comp.id === selectedComponentId;
-      const spoolMat = spoolMaterial(comp.id);
-      const pickMat = (defaultMat: THREE.Material) => {
-        if (multiIds.has(comp.id)) return multiMaterial;
-        if (isSelected) return selectedMaterial;
-        if (isColliding) return collisionMaterial;
-        return spoolMat ?? defaultMat;
-      };
+    const selectedMaterial = new THREE.MeshStandardMaterial({
+      color: 0x00f0ff,
+      emissive: 0x0284c7,
+      emissiveIntensity: 0.45,
+      roughness: 0.2,
+      metalness: 0.8,
+      side: THREE.DoubleSide
+    });
+    // Piezas de la selección múltiple (violeta)
+    const multiMaterial = new THREE.MeshStandardMaterial({
+      color: 0xa78bfa,
+      emissive: 0x5b21b6,
+      emissiveIntensity: 0.5,
+      roughness: 0.3,
+      metalness: 0.6,
+      side: THREE.DoubleSide
+    });
 
+    const highlighted = new Map<string, THREE.Material>();
+    if (!multiMode && selectedComponentId) highlighted.set(selectedComponentId, selectedMaterial);
+    for (const id of multiSelect) highlighted.set(id, multiMaterial);
+
+    const overlay = new THREE.Group();
+    const hidden: Array<[THREE.Mesh[], string]> = [];
+    for (const [id, material] of highlighted) {
+      const comp = graph.components.get(id);
+      if (!comp || (visibleIds && !visibleIds.has(id))) continue;
       const obj = buildComponentObject(comp, {
-        materials: pieceMaterials,
-        pick: pickMat,
+        materials: { pipe: material, fitting: material, tee: material, flange: material, valve: material, trim: material },
+        pick: () => material,
         hostOuterDiameter: comp.type === 'OLET' ? graph.oletHost(comp)?.parameters.outerDiameter : undefined
       });
-      if (obj) {
-        tagComponentMesh(obj, comp.id);
-        pipeGroup.add(obj);
-      }
+      if (!obj) continue;
+      obj.traverse((child) => (child.userData = { ...child.userData, componentId: id }));
+      overlay.add(obj);
+      hidden.push([setPieceHidden(batches, id, true), id]);
     }
+    pipeGroup.add(overlay);
 
-    // 1.a Soportes marcados sobre los caños: abrazadera y pie (o varilla, si cuelga)
-    const supportColors = { APOYO: 0xfacc15, GUIA: 0x22d3ee, ANCLAJE: 0xf87171, COLGANTE: 0xfb923c } as const;
-    for (const mark of graph.liveSupports()) {
-      const host = graph.supportHost(mark);
-      if (!host || (visibleIds && !visibleIds.has(host.id))) continue;
-      const od = host.parameters.outerDiameter || 60.3;
-      const axis = host.ports[1].position.clone().sub(host.ports[0].position).normalize();
-      const mat = new THREE.MeshStandardMaterial({ color: supportColors[mark.kind], roughness: 0.6, metalness: 0.2 });
-      const group = new THREE.Group();
-      const clamp = new THREE.Mesh(new THREE.CylinderGeometry(od * 0.62, od * 0.62, Math.max(30, od * 0.5), 20), mat);
-      clamp.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), axis);
-      group.add(clamp);
-      // El pie baja (o la varilla sube); en caños verticales sale hacia un costado
-      const away = Math.abs(axis.z) > 0.9 ? new THREE.Vector3(-1, 0, 0) : new THREE.Vector3(0, 0, mark.kind === 'COLGANTE' ? 1 : -1);
-      away.addScaledVector(axis, -away.dot(axis)).normalize();
-      const legLen = mark.kind === 'COLGANTE' ? od * 3 : od * 1.6;
-      const legSize = mark.kind === 'COLGANTE' ? od * 0.12 : od * 0.45;
-      const leg = new THREE.Mesh(new THREE.BoxGeometry(legSize, legLen, legSize), mat);
-      leg.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), away);
-      leg.position.copy(away).multiplyScalar(od / 2 + legLen / 2);
-      group.add(leg);
-      if (mark.kind !== 'COLGANTE') {
-        const plateW = mark.kind === 'ANCLAJE' ? od * 2 : od * 1.4;
-        const plate = new THREE.Mesh(new THREE.BoxGeometry(plateW, od * 0.15, plateW), mat);
-        plate.quaternion.copy(leg.quaternion);
-        plate.position.copy(away).multiplyScalar(od / 2 + legLen);
-        group.add(plate);
-      }
-      group.position.copy(mark.position);
-      pipeGroup.add(group);
-    }
+    return () => {
+      pipeGroup.remove(overlay);
+      disposeObject(overlay);
+      // Solo se vuelve a prender lo que apagó este efecto (no lo apagado por una edición)
+      for (const [changed, id] of hidden) setPieceHidden(changed, id, false);
+    };
+  }, [graph, version, collidingComponentIds, spoolView, fieldView, fieldBaseline, isolation, selectedComponentId, multiSelect, multiMode]);
 
-    // 1.b Renderizar cordones de soldadura / uniones 3D (WeldSubPart / JointMarkerSubPart de Plant 3D)
-    for (const joint of graph.joints.values()) {
-      const portA = graph.ports.get(joint.portAId);
-      if (portA && (!visibleIds || visibleIds.has(portA.componentId))) {
-        const quat = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), portA.direction);
-        if (joint.type === 'FLANGED') {
-          const thickness = Math.max(1, joint.gapMm ?? 1.6);
-          const gGeom = new THREE.CylinderGeometry((portA.outerDiameter || 60.3) * 0.8, (portA.outerDiameter || 60.3) * 0.8, thickness, 28);
-          gGeom.rotateX(Math.PI / 2);
-          const gMesh = new THREE.Mesh(gGeom, gasketBoltMaterial);
-          gMesh.position.copy(joint.position);
-          gMesh.quaternion.copy(quat);
-          pipeGroup.add(gMesh);
-
-          // Espárragos con tuercas, del largo que piden las dos piezas y la junta
-          const portB = graph.ports.get(joint.portBId);
-          const compA = graph.components.get(portA.componentId);
-          const compB = portB ? graph.components.get(portB.componentId) : undefined;
-          const withBolts = [compA, compB].find((c) => c?.parameters.boltCircle && (c.parameters.boltCount || c.parameters.boltHoles));
-          if (portB && compA && compB && withBolts) {
-            const tA = faceThicknessOf(compA);
-            const tB = faceThicknessOf(compB);
-            const gap = portA.position.distanceTo(portB.position);
-            const size = /(\d+)\s*\/\s*(\d+)/.exec(withBolts.parameters.boltSize || '');
-            const whole = /^\s*(\d+)(?=[\s-]+\d+\s*\/|\s*")/.exec(withBolts.parameters.boltSize || '');
-            const studDia = Math.min(40, Math.max(10, ((whole ? Number(whole[1]) : 0) + (size ? Number(size[1]) / Number(size[2]) : 0)) * 25.4 || 16));
-            const studs = new THREE.Mesh(
-              createStudsGeometry(
-                withBolts.parameters.boltCircle!,
-                withBolts.parameters.boltCount || withBolts.parameters.boltHoles || 4,
-                studDia,
-                tA + tB + gap + studDia * 3.2
-              ),
-              studMaterial
-            );
-            studs.position.copy(portA.position.clone().addScaledVector(portA.direction.clone().normalize(), (gap + tB - tA) / 2));
-            studs.quaternion.copy(quat);
-            pipeGroup.add(studs);
-          }
-        } else {
-          // Soldadura de campo: anillo naranja más grueso (corta el spool)
-          const ringR = (portA.outerDiameter || 60.3) / 2;
-          const beadGeom = joint.fieldWeld
-            ? new THREE.TorusGeometry(ringR + 6, 6, 10, 24)
-            : new THREE.TorusGeometry(ringR + 1.5, 2.5, 10, 24);
-          const beadMesh = new THREE.Mesh(beadGeom, joint.fieldWeld ? fieldWeldMaterial : weldBeadMaterial);
-          beadMesh.position.copy(joint.position);
-          beadMesh.quaternion.copy(quat);
-          pipeGroup.add(beadMesh);
-        }
-      }
-    }
+  // Bocas libres: anillo, esfera para tocar y flecha. Dependen de la boca activa, no de la pieza elegida
+  useEffect(() => {
+    const portsGroup = portsGroupRef.current;
+    if (!portsGroup) return;
+    disposeObject(portsGroup);
+    while (portsGroup.children.length > 0) portsGroup.remove(portsGroup.children[0]);
+    const visibleIds = isolatedIds(graph, isolation);
 
     // 2. Construir Grips "+" estilo AutoCAD Plant 3D para TODOS los puertos abiertos (fáciles de tocar en móvil/PC)
     const openPorts = graph.getOpenPorts();
@@ -740,7 +603,7 @@ export const CanvasViewer: React.FC = () => {
       );
       portsGroup.add(stubArrow);
     }
-  }, [graph, version, collidingComponentIds, selectedPortId, selectedComponentId, spoolView, fieldView, fieldBaseline, multiSelect, multiMode, isolation]);
+  }, [graph, version, selectedPortId, isolation]);
 
   // Medida: dos marcas, la línea entre ellas y el cartel con la distancia
   useEffect(() => {

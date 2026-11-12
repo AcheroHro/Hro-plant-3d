@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { distanceBetweenSegments, detectPipingCollisions } from '../collisionDetector';
 import { PipingGraph } from '../../../core/graph/PipingGraph';
 import { SpecFitting } from '../../../types/piping';
+import { loadSpec } from '../../../__tests__/fixtures';
 
 describe('collisionDetector - Detección de Interferencias Espaciales', () => {
   it('Debe calcular la distancia exacta entre dos segmentos ortogonales que se cruzan en el espacio', () => {
@@ -71,5 +72,32 @@ describe('collisionDetector - Detección de Interferencias Espaciales', () => {
     const result = detectPipingCollisions(graph);
     expect(result.hasCollision).toBe(false);
     expect(result.collidingComponentIds.size).toBe(0);
+  });
+
+  it('caños a los dos lados de un par de bridas SO no chocan; un caño que cruza sí', async () => {
+    const spec = await loadSpec('RCI1');
+    const graph = new PipingGraph('RCI1', 2);
+    const pipeSpec = spec.findPipe(2)!;
+    const flangeSpec = spec.findFlange(2, undefined, { connectToEndType: 'PL' })!;
+    expect(flangeSpec.shortDescription).toMatch(/SO/);
+    const gasket = spec.findGasket(2);
+
+    const p1 = graph.addPipe(new THREE.Vector3(0, 0, 0), new THREE.Vector3(1000, 0, 0), pipeSpec);
+    const f1 = graph.addFlange(p1.ports[1], flangeSpec, gasket);
+    const f2 = graph.addFlange(f1.ports.find((p) => !p.connectedJointId)!, flangeSpec, gasket);
+    const open = f2.ports.find((p) => !p.connectedJointId)!;
+    const p2 = graph.addPipe(open.position.clone(), open.position.clone().addScaledVector(open.direction, 1000), pipeSpec);
+    // Las puntas de los dos caños quedan a pocos milímetros, alineadas
+    expect(p1.ports[1].position.distanceTo(p2.ports[0].position)).toBeLessThan(60);
+
+    // Si el segundo caño no quedó unido solo, se une como lo hace la app
+    if (!p2.ports[0].connectedJointId) graph.connectPorts(open.id, p2.ports[0].id);
+    expect(detectPipingCollisions(graph).hasCollision).toBe(false);
+
+    // Un caño suelto que cruza por las bridas sí es un choque
+    const cross = graph.addPipe(new THREE.Vector3(1005, -500, 0), new THREE.Vector3(1005, 500, 0), pipeSpec);
+    const result = detectPipingCollisions(graph);
+    expect(result.collidingComponentIds.has(cross.id)).toBe(true);
+    expect(result.collidingComponentIds.has(p1.id) || result.collidingComponentIds.has(p2.id)).toBe(true);
   });
 });
