@@ -2,8 +2,7 @@ import React, { useRef } from 'react';
 import { usePipingStore } from '../store/usePipingStore';
 import { useUiConfigStore } from '../store/useUiConfigStore';
 import { useProjectStore } from '../store/useProjectStore';
-import { PcfExporter } from '../core/exporters/PcfExporter';
-import { downloadFile } from '../utils/fileDownloader';
+import { quickExportPcf } from './pcfExport';
 import { Redo2, Undo2 } from 'lucide-react';
 import { MobileSheet } from './MobileSheet';
 import {
@@ -23,7 +22,7 @@ import {
 } from './icons/ActionIcons';
 import { usePhoneLayout, vibrate } from './useIsPhone';
 
-const BUILT_IN_SPECS = ['RCI1', 'CS150', 'CS300', 'SS150'];
+import { BUILT_IN_SPECS } from '../core/specs/builtInSpecs';
 
 export const TopNavigation: React.FC = () => {
   const cameraMode = usePipingStore((s) => s.cameraMode);
@@ -119,16 +118,8 @@ export const TopNavigation: React.FC = () => {
       });
       return;
     }
-    const refName = (lineNumber || `100-${specCode}-${nominalDiameter}"`).trim();
-    const safeFileName = refName.replace(/[^a-zA-Z0-9_-]/g, '_').toLowerCase();
-    const pcfContent = PcfExporter.exportToPcf(graph, {
-      pipelineReference: refName,
-      projectIdentifier: 'ACHERO_PLANT_3D'
-    });
-    downloadFile(`${safeFileName}.pcf`, pcfContent, 'text/plain');
-    usePipingStore.setState({
-      statusMessage: `PCF para Plant 3D exportado: ${safeFileName}.pcf (${graph.components.size} piezas). Cargalo con PCF to Pipe.`
-    });
+    // Un PCF por número de línea, como el PCF Export de Plant
+    usePipingStore.setState({ statusMessage: quickExportPcf(graph, usePipingStore.getState().specReader?.specName) });
   };
 
   const formatNd = (d: number) => {

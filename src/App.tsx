@@ -15,6 +15,7 @@ import { ProjectsModal } from './ui/ProjectsModal';
 import { FieldModal } from './ui/FieldModal';
 import { PwaBanner } from './ui/PwaBanner';
 import { ContextDock } from './ui/ContextDock';
+import { SupportEditor } from './ui/SupportEditor';
 import { PieceMenu } from './ui/PieceMenu';
 import { MultiSelectBar } from './ui/MultiSelectBar';
 import { ModelCheck } from './ui/ModelCheck';
@@ -77,6 +78,7 @@ export default function App() {
 
       {/* Teléfono: barra de pestañas que abre un panel a la vez */}
       <ContextDock />
+      <SupportEditor />
 
       {/* Edición con gestos: menú de la pieza apretada y barra de selección múltiple */}
       <PieceMenu />

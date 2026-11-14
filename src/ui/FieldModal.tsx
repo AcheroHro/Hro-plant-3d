@@ -4,6 +4,7 @@ import { useProjectStore } from '../store/useProjectStore';
 import { CHANGE_LABEL, ChangeKind, componentLabel, diffStates, summarizeChanges } from '../core/field/changeLog';
 import { buildFieldReport, ReportNote } from '../core/field/fieldReport';
 import { buildIsoSheets } from '../core/drawings/isoSheet';
+import { computeSpools } from '../core/spools/spoolEngine';
 import { sheetsToPdf } from '../core/drawings/pdfWriter';
 import { SheetImage } from '../core/drawings/sheet';
 import { getPhoto } from '../persistence/indexedDbStorage';
@@ -140,7 +141,17 @@ export const FieldModal: React.FC = () => {
         baselineAt,
         drawnBy,
         changes,
-        notes: reportNotes
+        notes: reportNotes,
+        // Soldaduras con la numeración de obra; el isométrico de la línea hace de mapa
+        welds: computeSpools(graph).welds.map((w) => ({
+          number: w.number,
+          kind: w.kind,
+          type: w.type,
+          nominalDiameter: `${w.nominalDiameter}"`,
+          spools: w.spoolIds.join(' / '),
+          allowanceMm: w.allowanceMm
+        })),
+        weldMapIncluded: withIso && graph.components.size > 0
       });
       if (withIso && graph.components.size) {
         const prefs = drawingPrefs();
@@ -376,7 +387,7 @@ export const FieldModal: React.FC = () => {
               </label>
               <label className="flex items-center gap-2 text-xs text-slate-300">
                 <input type="checkbox" checked={withIso} onChange={(e) => setWithIso(e.target.checked)} className="accent-orange-500" />
-                Agregar el isométrico de la línea como quedó
+                Agregar el isométrico de la línea como quedó (es el mapa de soldaduras)
               </label>
               <div className="text-[11px] text-slate-400 font-mono">
                 {changes.length} cambios · {notes.length} notas · {notes.reduce((n, x) => n + x.photoIds.length, 0)} fotos

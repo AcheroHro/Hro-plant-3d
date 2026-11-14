@@ -21,7 +21,7 @@ const LOOSE_IF_FLANGED = new Set<ComponentType>(['VALVE', 'INSTRUMENT', 'MISC'])
 export type WeldKind = 'SHOP' | FieldWeldKind;
 
 export interface SpoolWeld {
-  /** W-01 (taller) o FW-01 / FFW-01 (campo) */
+  /** SW-001 (taller), FW-001 (campo) o FFW-001 (ajuste en obra) */
   number: string;
   /** Junta del grafo; los olets no tienen junta (se sueldan sobre el caño) */
   jointId?: string;
@@ -295,10 +295,13 @@ export function computeSpools(graph: PipingGraph): SpoolResult {
     });
   }
   raw.sort((x, y) => Math.min(...x.componentIds.map((i) => order.get(i) ?? 1e9)) - Math.min(...y.componentIds.map((i) => order.get(i) ?? 1e9)));
-  let shopN = 0;
-  let fieldN = 0;
+  // SW-001 de taller, FW-001 de campo y FFW-001 de ajuste en obra, cada una con su propia cuenta.
+  // Plant solo numera soldaduras con enteros: esta es la numeración que se usa en obra
+  const counters: Record<string, number> = {};
   for (const w of raw) {
-    const number = w.kind === 'SHOP' ? `W-${String(++shopN).padStart(2, '0')}` : `${w.kind}-${String(++fieldN).padStart(2, '0')}`;
+    const prefix = w.kind === 'SHOP' ? 'SW' : w.kind;
+    counters[prefix] = (counters[prefix] ?? 0) + 1;
+    const number = `${prefix}-${String(counters[prefix]).padStart(3, '0')}`;
     const weld: SpoolWeld = { ...w, number };
     welds.push(weld);
     for (const sid of weld.spoolIds) {

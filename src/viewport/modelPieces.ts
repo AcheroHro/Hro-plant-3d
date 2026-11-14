@@ -3,6 +3,7 @@ import type { PipingGraph } from '../core/graph/PipingGraph';
 import type { Component, Joint, SupportKind, SupportMark } from '../types/piping';
 import { buildComponentObject, faceThicknessOf, PieceMaterials } from './buildComponentMesh';
 import { createStudsGeometry } from './geometries/flangeGeometry';
+import { supportFrame } from '../core/graph/supportFrame';
 
 /**
  * Todo lo que el visor dibuja del modelo, pieza por pieza, con una firma de lo que define su
@@ -121,8 +122,8 @@ export function modelPieces(graph: PipingGraph, opts: ModelPiecesOptions): Piece
     specs.push({
       key: `#support/${mark.id}`,
       pickable: false,
-      sig: JSON.stringify([mark.kind, vec(mark.position), host.parameters.outerDiameter, vec(a), vec(b)]),
-      build: () => buildSupportObject(mark, host, materials)
+      sig: JSON.stringify([mark.kind, vec(mark.position), host.parameters.outerDiameter, vec(a), vec(b), mark.heightMm ?? null, mark.rotationDeg ?? 0]),
+      build: () => buildSupportObject(mark, host, materials.support[mark.kind])
     });
   }
 
@@ -155,31 +156,29 @@ export function modelPieces(graph: PipingGraph, opts: ModelPiecesOptions): Piece
   return specs;
 }
 
-/** Soporte marcado sobre un caño: abrazadera y pie (o varilla, si cuelga) */
-function buildSupportObject(mark: SupportMark, host: Component, materials: ModelMaterials): THREE.Object3D {
+/**
+ * Soporte marcado sobre un caño: abrazadera, pie (o varilla, si cuelga) hasta el punto de apoyo
+ * y placa. La altura y el giro salen de supportFrame, igual que en el PCF.
+ */
+export function buildSupportObject(mark: SupportMark, host: Component, mat: THREE.Material): THREE.Object3D {
   const od = host.parameters.outerDiameter || 60.3;
-  const axis = host.ports[1].position.clone().sub(host.ports[0].position).normalize();
-  const mat = materials.support[mark.kind];
+  const { axis, away, reachMm } = supportFrame(mark, host);
   const group = new THREE.Group();
   const clamp = new THREE.Mesh(new THREE.CylinderGeometry(od * 0.62, od * 0.62, Math.max(30, od * 0.5), 20), mat);
   clamp.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), axis);
   group.add(clamp);
-  // El pie baja (o la varilla sube); en caños verticales sale hacia un costado
-  const away = Math.abs(axis.z) > 0.9 ? new THREE.Vector3(-1, 0, 0) : new THREE.Vector3(0, 0, mark.kind === 'COLGANTE' ? 1 : -1);
-  away.addScaledVector(axis, -away.dot(axis)).normalize();
-  const legLen = mark.kind === 'COLGANTE' ? od * 3 : od * 1.6;
+  const legLen = Math.max(10, reachMm - od / 2);
   const legSize = mark.kind === 'COLGANTE' ? od * 0.12 : od * 0.45;
   const leg = new THREE.Mesh(new THREE.BoxGeometry(legSize, legLen, legSize), mat);
   leg.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), away);
   leg.position.copy(away).multiplyScalar(od / 2 + legLen / 2);
   group.add(leg);
-  if (mark.kind !== 'COLGANTE') {
-    const plateW = mark.kind === 'ANCLAJE' ? od * 2 : od * 1.4;
-    const plate = new THREE.Mesh(new THREE.BoxGeometry(plateW, od * 0.15, plateW), mat);
-    plate.quaternion.copy(leg.quaternion);
-    plate.position.copy(away).multiplyScalar(od / 2 + legLen);
-    group.add(plate);
-  }
+  // Placa en el punto de apoyo (el colgante termina en la viga con una placa chica)
+  const plateW = mark.kind === 'ANCLAJE' ? od * 2 : mark.kind === 'COLGANTE' ? od * 0.8 : od * 1.4;
+  const plate = new THREE.Mesh(new THREE.BoxGeometry(plateW, od * 0.15, plateW), mat);
+  plate.quaternion.copy(leg.quaternion);
+  plate.position.copy(away).multiplyScalar(reachMm);
+  group.add(plate);
   group.position.copy(mark.position);
   return group;
 }

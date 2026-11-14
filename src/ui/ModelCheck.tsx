@@ -3,6 +3,7 @@ import { CircleAlert, CircleCheck, CircleHelp, CircleX, Info, TriangleAlert, X }
 import { usePipingStore } from '../store/usePipingStore';
 import { useUiConfigStore } from '../store/useUiConfigStore';
 import { countIssues, IssueSeverity, ModelIssue, validateModel } from '../core/validation/validateModel';
+import { knownSpecCodes } from '../core/specs/builtInSpecs';
 import { MobileSheet } from './MobileSheet';
 import { usePhoneLayout, vibrate } from './useIsPhone';
 
@@ -28,11 +29,12 @@ export const ModelCheck: React.FC = () => {
   const issuesOpen = useUiConfigStore((s) => s.issuesOpen);
   const setIssuesOpen = useUiConfigStore((s) => s.setIssuesOpen);
   const setHelpOpen = useUiConfigStore((s) => s.setHelpOpen);
+  const specName = usePipingStore((s) => s.specReader?.specName);
 
   const issues = useMemo(
-    () => validateModel(graph, { collidingIds: colliding }),
+    () => validateModel(graph, { collidingIds: colliding, knownSpecs: knownSpecCodes(graph.activeSpec, specName) }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [graph, version, colliding]
+    [graph, version, colliding, specName]
   );
   const counts = countIssues(issues);
   const problems = counts.error + counts.warning;

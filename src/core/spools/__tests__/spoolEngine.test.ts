@@ -32,7 +32,7 @@ describe('Spools', () => {
     const flanged = Array.from(graph.joints.values()).filter((j) => j.type === 'FLANGED').length;
     expect(r.erection.filter((e) => e.type === 'GASKET').reduce((n, e) => n + e.quantity, 0)).toBe(flanged);
     // Soldaduras numeradas en orden y pulgadas-diámetro sumadas por spool
-    expect(r.welds[0].number).toBe('W-01');
+    expect(r.welds[0].number).toBe('SW-001');
     const total = r.spools.reduce((n, s) => n + s.weldInches, 0);
     expect(total).toBeCloseTo(r.welds.reduce((n, w) => n + w.nominalDiameter, 0), 6);
     expect(spoolSheetText(r.spools[0])).toContain('SPOOL SKA-L01-SP01');
@@ -57,7 +57,7 @@ describe('Spools', () => {
     expect(r.spools).toHaveLength(2);
     expect(r.spools.map((s) => s.id)).toEqual(['L-100-SP01', 'L-100-SP02']);
     const fw = r.welds.find((w) => w.kind === 'FFW')!;
-    expect(fw.number).toBe('FFW-01');
+    expect(fw.number).toBe('FFW-001');
     expect(fw.spoolIds).toHaveLength(2);
     const cut = r.spools.flatMap((s) => s.cuts).find((c) => c.componentId === r1.incomingPipe.id)!;
     expect(cut.cutLengthMm).toBeCloseTo(before + 150, 6);

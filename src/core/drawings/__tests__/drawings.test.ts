@@ -52,7 +52,7 @@ describe('Isométricos', () => {
     expect(texts(sp01, 'DIM')).toContain('242');
     // Corte del niple y sus soldaduras
     expect(texts(sp01)).toContain('N-01');
-    expect(texts(sp01).filter((s) => /^W-0[12]$/.test(s))).toHaveLength(4); // en el dibujo y en la tabla
+    expect(texts(sp01).filter((s) => /^SW-00[12]$/.test(s))).toHaveLength(4); // en el dibujo y en la tabla
   });
 
   it('codo con soldadura de campo FFW: cotas a centro de codo y marca de campo', async () => {
@@ -73,7 +73,7 @@ describe('Isométricos', () => {
     // La soldadura de campo es punto de cota: 38 (centro del codo a la soldadura) + 762 = 800
     expect(dims).toContain('38');
     expect(dims).toContain('762');
-    expect(texts(line, 'FIELD')).toContain('FFW-01 +100');
+    expect(texts(line, 'FIELD')).toContain('FFW-001 +100');
   });
 
   it('la isometría sin escala agranda lo corto y achica lo largo', () => {

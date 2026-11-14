@@ -1151,6 +1151,24 @@ export class PipingGraph {
     return this.supports.delete(id);
   }
 
+  /** Cambia los datos de un soporte: clase, tipo y tag de Plant, altura y giro */
+  public updateSupport(
+    id: string,
+    patch: Partial<Pick<SupportMark, 'kind' | 'tag' | 'plantType' | 'heightMm' | 'rotationDeg'>>
+  ): SupportMark {
+    const mark = this.supports.get(id);
+    if (!mark) throw new Error('Ese soporte ya no está en el modelo.');
+    if (patch.kind !== undefined) mark.kind = patch.kind;
+    if (patch.tag !== undefined) mark.tag = patch.tag.trim() || undefined;
+    if (patch.plantType !== undefined) mark.plantType = patch.plantType.trim() || undefined;
+    if (patch.heightMm !== undefined) mark.heightMm = Number.isFinite(patch.heightMm) && patch.heightMm > 0 ? Math.round(patch.heightMm) : undefined;
+    if (patch.rotationDeg !== undefined) {
+      const r = ((Math.round(patch.rotationDeg) % 360) + 360) % 360;
+      mark.rotationDeg = r || undefined;
+    }
+    return mark;
+  }
+
   /** Caño que sostiene un soporte (por posición) */
   public supportHost(mark: SupportMark): Component | null {
     for (const comp of this.components.values()) if (this.isOnPipe(mark.position, comp)) return comp;
@@ -1893,7 +1911,10 @@ export class PipingGraph {
         kind: s.kind,
         position: [s.position.x, s.position.y, s.position.z],
         nominalDiameter: s.nominalDiameter,
-        tag: s.tag
+        tag: s.tag,
+        plantType: s.plantType,
+        heightMm: s.heightMm,
+        rotationDeg: s.rotationDeg
       }))
     };
   }
@@ -1913,7 +1934,16 @@ export class PipingGraph {
     this.pcfInfo = state.pcf;
     this.supports.clear();
     for (const s of state.supports ?? []) {
-      this.supports.set(s.id, { id: s.id, kind: s.kind, position: new THREE.Vector3(...s.position), nominalDiameter: s.nominalDiameter, tag: s.tag });
+      this.supports.set(s.id, {
+        id: s.id,
+        kind: s.kind,
+        position: new THREE.Vector3(...s.position),
+        nominalDiameter: s.nominalDiameter,
+        tag: s.tag,
+        plantType: s.plantType,
+        heightMm: s.heightMm,
+        rotationDeg: s.rotationDeg
+      });
     }
 
     for (const sComp of Object.values(state.components)) {

@@ -3,6 +3,7 @@ import { usePipingStore } from '../store/usePipingStore';
 import { PcfExporter } from '../core/exporters/PcfExporter';
 import { DxfExporter, DxfViewType } from '../core/exporters/DxfExporter';
 import { downloadFile } from '../utils/fileDownloader';
+import { downloadLinePcfs, piecesOutsideSpec } from './pcfExport';
 import { DrawingsSection } from './DrawingsSection';
 
 interface ExportModalProps {
@@ -43,6 +44,29 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
     });
   }, [isOpen, graph, version, lineRef, boreUnits, pcfTarget, includeWelds, includeMaterials]);
 
+  // Un PCF por número de línea, como el PCF Export de Plant: se eligen las líneas a exportar
+  const byLine = useMemo(
+    () =>
+      isOpen
+        ? PcfExporter.exportByLine(graph, {
+            projectIdentifier: 'ACHERO_PLANT_3D',
+            boreUnits,
+            target: pcfTarget,
+            includeWeldsAndFasteners: includeWelds,
+            includeMaterialsTable: includeMaterials
+          })
+        : [],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [isOpen, graph, version, boreUnits, pcfTarget, includeWelds, includeMaterials]
+  );
+  const [skippedLines, setSkippedLines] = useState<Set<string>>(new Set());
+  const chosenLines = byLine.filter((f) => !skippedLines.has(f.lineNumber));
+  const outsideSpec = useMemo(
+    () => (isOpen ? piecesOutsideSpec(graph, usePipingStore.getState().specReader?.specName) : 0),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [isOpen, graph, version]
+  );
+
   // Modelo que vino de un PCF: la unidad de diámetros es la del archivo original
   const pcfSource = graph.pcfInfo;
   const effectiveBore = pcfSource?.boreUnits ?? boreUnits;
@@ -54,9 +78,15 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
   const pcfFileName = pcfTarget === 'plant' ? `${safeBaseName}.pcf` : `${safeBaseName}_isogen.pcf`;
 
   const handleExportPcf = () => {
-    downloadFile(pcfFileName, pcfPreviewContent, 'text/plain');
+    // Una sola línea: sale con el número de línea escrito arriba. Varias: un archivo por línea
+    if (byLine.length <= 1) {
+      downloadFile(pcfFileName, pcfPreviewContent, 'text/plain');
+      usePipingStore.setState({ statusMessage: `Archivo PCF exportado: ${pcfFileName} (${graph.components.size} piezas).` });
+      return;
+    }
+    downloadLinePcfs(chosenLines, pcfTarget === 'isogen' ? '_isogen' : '');
     usePipingStore.setState({
-      statusMessage: `Archivo PCF exportado: ${pcfFileName} (${graph.components.size} piezas).`
+      statusMessage: `${chosenLines.length} PCF exportados, uno por línea: ${chosenLines.map((f) => f.fileName).join(', ')}.`
     });
   };
 
@@ -236,16 +266,80 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
               )}
             </div>
 
+            {byLine.length > 1 && (
+              <div className="mb-3 bg-[#181a20] p-2.5 rounded border border-[#343b48] space-y-1.5">
+                <span className="text-[11px] font-bold text-slate-200 block">
+                  El modelo tiene {byLine.length} líneas: sale un PCF por línea, con su número de línea
+                </span>
+                {byLine.map((f) => (
+                  <label key={f.lineNumber} className="flex items-center gap-2 text-[11px] text-slate-300 min-h-[32px]">
+                    <input
+                      type="checkbox"
+                      checked={!skippedLines.has(f.lineNumber)}
+                      onChange={(e) => {
+                        const next = new Set(skippedLines);
+                        if (e.target.checked) next.delete(f.lineNumber);
+                        else next.add(f.lineNumber);
+                        setSkippedLines(next);
+                      }}
+                      className="w-4 h-4 accent-[#0696d7]"
+                    />
+                    <span className="font-mono font-bold text-[#38bdf8]">{f.lineNumber}</span>
+                    <span className="text-slate-500">{f.componentCount} piezas</span>
+                    <span className="ml-auto font-mono text-slate-500 truncate">{f.fileName}</span>
+                  </label>
+                ))}
+              </div>
+            )}
+
+            {outsideSpec > 0 && (
+              <p className="mb-3 p-2.5 rounded border border-amber-500/50 bg-amber-500/10 text-[11px] text-amber-100 leading-relaxed">
+                {outsideSpec} pieza{outsideSpec > 1 ? 's tienen' : ' tiene'} una spec que la app no tiene cargada. Si el proyecto de Plant
+                tampoco la tiene, PCF to Pipe {outsideSpec > 1 ? 'las pone' : 'la pone'} como pieza provisoria (placeholder). Están en la
+                revisión del modelo.
+              </p>
+            )}
+
+            {pcfTarget === 'plant' && (
+              <details open className="mb-3 bg-[#181a20] p-2.5 rounded border border-[#343b48] text-[11px] text-slate-300 leading-relaxed">
+                <summary className="font-bold text-slate-200 cursor-pointer">Cómo cargarlo en Plant 3D</summary>
+                <ol className="list-decimal pl-5 mt-1.5 space-y-1">
+                  <li>
+                    Abrí o creá el dibujo <b>desde el Project Manager</b> del proyecto. Si el dibujo no es del proyecto, PCF to Pipe no importa
+                    nada.
+                  </li>
+                  <li>
+                    Pestaña Home, panel Part Insertion, <b>PCF to Pipe</b>. Podés elegir varios PCF a la vez (uno por línea).
+                  </li>
+                  <li>
+                    Si en Status dice <b>spec unavailable</b>, tocá Settings y asigná a cada spec del PCF una spec del proyecto. Lo que queda sin
+                    asignar entra como pieza provisoria.
+                  </li>
+                  <li>
+                    <b>Create Piping</b>. Después revisá con Validate en el Project Manager y con Toggle Disconnect Markers para ver uniones sueltas.
+                  </li>
+                </ol>
+                <a
+                  href="https://help.autodesk.com/view/PLNT3D/2027/ENU/?guid=GUID-2FE44F87-E696-4C21-B722-F1075166DA7B"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-block mt-1.5 text-[#38bdf8] underline"
+                >
+                  Ayuda de Autodesk: trabajar con archivos PCF
+                </a>
+              </details>
+            )}
+
             {/* Botones de Acción PCF */}
             <div className="flex items-center gap-2">
               <button
                 type="button"
                 onClick={handleExportPcf}
-                disabled={compCount === 0}
+                disabled={compCount === 0 || (byLine.length > 1 && chosenLines.length === 0)}
                 className="flex-1 h-10 rounded bg-[#0696d7] hover:bg-[#0582ba] text-white font-extrabold text-xs shadow-md active:scale-[0.99] transition-all flex items-center justify-center space-x-2 disabled:opacity-50"
               >
                 <span>⬇</span>
-                <span>DESCARGAR ARCHIVO .PCF</span>
+                <span>{byLine.length > 1 ? `DESCARGAR ${chosenLines.length} PCF (UNO POR LÍNEA)` : 'DESCARGAR ARCHIVO .PCF'}</span>
               </button>
 
               <button

@@ -17,7 +17,9 @@ export interface ModelIssue {
     | 'LONG_PIPE'
     | 'TRIMMED_ELBOW'
     | 'SEPARATE_RUNS'
-    | 'OPEN_PORT';
+    | 'OPEN_PORT'
+    | 'SPEC_UNKNOWN'
+    | 'JOINT_SPEC';
   severity: IssueSeverity;
   title: string;
   detail: string;
@@ -32,7 +34,15 @@ export interface ValidateOptions {
   stockLengthMm?: number;
   /** Desalineación admitida en una unión, en grados (cubre pendientes normales) */
   maxJointAngleDeg?: number;
+  /**
+   * Specs que la app tiene cargadas o integradas. Una pieza con otra spec, o sin spec, en Plant
+   * queda como pieza provisoria (placeholder) si el proyecto no la tiene. Sin dato, no se revisa.
+   */
+  knownSpecs?: string[];
 }
+
+/** Juntas y bulones acompañan a la brida: no cuentan para las specs de una unión */
+const FASTENER = new Set(['GASKET', 'BOLT_SET']);
 
 const ORDER: Record<IssueSeverity, number> = { error: 0, warning: 1, info: 2 };
 
@@ -63,6 +73,32 @@ export function validateModel(graph: PipingGraph, options: ValidateOptions = {})
     });
   }
 
+  if (options.knownSpecs) {
+    const known = new Set(options.knownSpecs.map((x) => x.toUpperCase()));
+    const outside = new Map<string, Component[]>();
+    for (const comp of graph.components.values()) {
+      if (FASTENER.has(comp.type)) continue;
+      const code = (comp.specCode || '').trim();
+      if (code && known.has(code.toUpperCase())) continue;
+      const key = code || '';
+      const list = outside.get(key);
+      if (list) list.push(comp);
+      else outside.set(key, [comp]);
+    }
+    for (const [code, comps] of outside) {
+      const n = comps.length;
+      issues.push({
+        code: 'SPEC_UNKNOWN',
+        severity: 'warning',
+        title: code
+          ? `${n === 1 ? name(comps[0]) : `${n} piezas`} con la spec ${code}, que no está cargada`
+          : `${n === 1 ? `${name(comps[0])} sin spec` : `${n} piezas sin spec`}`,
+        detail: `Al importar el PCF, PCF to Pipe busca ${code ? `la spec ${code}` : 'la spec de cada pieza'} en el proyecto de Plant. Si no la encuentra, pone una pieza provisoria (placeholder) que hay que reemplazar a mano. Cargá esa spec en Archivo o cambiá ${n === 1 ? 'la pieza' : 'las piezas'} por una de la spec del proyecto.`,
+        componentIds: comps.map((c) => c.id)
+      });
+    }
+  }
+
   for (const joint of graph.joints.values()) {
     const a = graph.ports.get(joint.portAId);
     const b = graph.ports.get(joint.portBId);
@@ -78,6 +114,21 @@ export function validateModel(graph: PipingGraph, options: ValidateOptions = {})
         severity: 'error',
         title: `Unión entre diámetros distintos (${a.nominalDiameter}" y ${b.nominalDiameter}")`,
         detail: `${pair} están unidos sin reducción.`,
+        componentIds: ids
+      });
+    }
+    // Spec distinta a cada lado: Plant lo marca al validar. A propósito, va en una unión bridada
+    const specA = (compA.specCode || '').toUpperCase();
+    const specB = (compB.specCode || '').toUpperCase();
+    if (specA && specB && specA !== specB && !FASTENER.has(compA.type) && !FASTENER.has(compB.type)) {
+      const flanged = joint.type === 'FLANGED';
+      issues.push({
+        code: 'JOINT_SPEC',
+        severity: flanged ? 'info' : 'warning',
+        title: flanged ? `Cambio de spec en una brida (${compA.specCode} a ${compB.specCode})` : `Unión entre specs distintas (${compA.specCode} y ${compB.specCode})`,
+        detail: flanged
+          ? `${pair}: el cambio de spec queda en la unión bridada, como se hace en Plant. Revisá que sea a propósito.`
+          : `${pair}: están soldados o enchufados con specs distintas. La validación de Plant lo marca como diferencia de propiedades; cambiá una de las piezas o hacé el cambio de spec en una brida.`,
         componentIds: ids
       });
     }

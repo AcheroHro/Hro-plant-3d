@@ -4,6 +4,7 @@ import { PcfImporter } from '../importers/PcfImporter';
 import { Component, Joint, PcfSourceLine } from '../../types/piping';
 import { plantEndToPcf } from '../specs/units';
 import { computeSpools } from '../spools/spoolEngine';
+import { supportFrame } from '../graph/supportFrame';
 import {
   PCF_EOL,
   blockTypeForComponent,
@@ -29,6 +30,30 @@ export interface PcfExportOptions {
   includeWeldsAndFasteners?: boolean;
   /** Solo isogen: sección MATERIALS */
   includeMaterialsTable?: boolean;
+  /**
+   * Solo estas piezas (por ejemplo, las de una línea). Las uniones y los soportes se escriben si
+   * tocan alguna de ellas. Sin dato, todo el modelo.
+   */
+  componentIds?: ReadonlySet<string>;
+}
+
+/** Un PCF por número de línea, como "PCF Export" de Plant 3D */
+export interface LinePcf {
+  lineNumber: string;
+  fileName: string;
+  content: string;
+  componentCount: number;
+}
+
+/** Número de línea de una pieza: el suyo, o el de la línea activa si no tiene */
+export function lineNumberOf(graph: PipingGraph, comp: Component): string {
+  return (comp.parameters.lineNumber || graph.activeLineNumber || 'LINE-101').trim();
+}
+
+/** Nombre de archivo a partir del número de línea (sin comillas, barras ni espacios) */
+export function pcfFileName(lineNumber: string): string {
+  const clean = lineNumber.replace(/"/g, 'in').replace(/[^a-zA-Z0-9_.-]+/g, '_').replace(/^_+|_+$/g, '');
+  return `${clean || 'linea'}.pcf`;
 }
 
 /** Diferencia máxima (mm) para considerar que un punto no se movió y escribir la línea original */
@@ -48,6 +73,36 @@ function point(v: THREE.Vector3): string {
  * se escriben con los datos de su pieza de spec (SKEY, descripción, spec).
  */
 export class PcfExporter {
+  /**
+   * Un PCF por número de línea. Cada pieza va en el de su línea; las que no tienen número van en
+   * la línea activa. Así PCF to Pipe de Plant recibe cada línea con su PIPELINE-REFERENCE.
+   */
+  public static exportByLine(graph: PipingGraph, options: Omit<PcfExportOptions, 'componentIds' | 'pipelineReference'> = {}): LinePcf[] {
+    const groups = new Map<string, Set<string>>();
+    for (const comp of graph.components.values()) {
+      const line = lineNumberOf(graph, comp);
+      let ids = groups.get(line);
+      if (!ids) groups.set(line, (ids = new Set()));
+      ids.add(comp.id);
+    }
+    const used = new Set<string>();
+    return [...groups.entries()].map(([lineNumber, ids]) => {
+      let fileName = pcfFileName(lineNumber);
+      // Dos líneas que dan el mismo nombre de archivo no se pisan
+      for (let k = 2; used.has(fileName.toLowerCase()); k++) fileName = pcfFileName(`${lineNumber}_${k}`);
+      used.add(fileName.toLowerCase());
+      return {
+        lineNumber,
+        fileName,
+        componentCount: [...ids].filter((id) => {
+          const t = graph.components.get(id)?.type;
+          return t !== 'GASKET' && t !== 'BOLT_SET';
+        }).length,
+        content: PcfExporter.exportToPcf(graph, { ...options, pipelineReference: lineNumber, componentIds: ids })
+      };
+    });
+  }
+
   public static exportToPcf(graph: PipingGraph, options: PcfExportOptions = {}): string {
     const target = options.target ?? 'plant';
     const isogen = target === 'isogen';
@@ -55,15 +110,21 @@ export class PcfExporter {
     const pipelineRef = options.pipelineReference || graph.activeLineNumber || 'LINE-101';
     const lines: string[] = [];
     const materials = new Map<string, string>();
+    const only = options.componentIds;
+    const included = (id: string | undefined) => !only || (id !== undefined && only.has(id));
 
     lines.push(...PcfExporter.header(graph, pipelineRef, boreUnits, options));
 
-    // Isogen: cada pieza de taller lleva su spool; las de montaje, ERECTION-ITEM
-    const spoolOf = isogen ? computeSpools(graph).spoolOf : null;
+    // Isogen: cada pieza de taller lleva su spool; las de montaje, ERECTION-ITEM.
+    // Las soldaduras llevan el mismo número que en la app (SW-001, FW-001, FFW-001)
+    const spools = isogen ? computeSpools(graph) : null;
+    const spoolOf = spools?.spoolOf ?? null;
+    const weldNo = new Map((spools?.welds ?? []).filter((w) => w.jointId).map((w) => [w.jointId!, w.number]));
 
     let pipeSeq = 1;
     for (const comp of graph.components.values()) {
       if (comp.type === 'GASKET' || comp.type === 'BOLT_SET') continue;
+      if (!included(comp.id)) continue;
       const block = comp.parameters.pcf
         ? PcfExporter.sourceBlock(comp, boreUnits)
         : PcfExporter.newBlock(comp, boreUnits, isogen);
@@ -85,19 +146,30 @@ export class PcfExporter {
     if (isogen) {
       const skeys = { APOYO: 'SKID', GUIA: 'GUID', ANCLAJE: 'ANCH', COLGANTE: '01HG' } as const;
       for (const s of graph.liveSupports()) {
+        const host = graph.supportHost(s);
+        if (!host || !included(host.id)) continue;
+        // La dirección sale del giro que se le dio en la app (abajo, arriba o de costado)
+        const frame = supportFrame(s, host);
         lines.push(
           'SUPPORT',
           `${IND}CO-ORDS ${point(s.position)} ${formatBore(s.nominalDiameter, boreUnits)}`,
           `${IND}SKEY ${skeys[s.kind]}`,
-          `${IND}NAME ${s.tag || s.kind}`,
-          `${IND}SUPPORT-DIRECTION ${s.kind === 'COLGANTE' ? 'UP' : 'DOWN'}`
+          `${IND}NAME ${s.tag || s.plantType || s.kind}`,
+          ...(s.plantType ? [`${IND}ITEM-DESCRIPTION ${s.plantType}`] : []),
+          `${IND}SUPPORT-DIRECTION ${frame.direction}`
         );
       }
     }
 
     if (isogen && (options.includeWeldsAndFasteners ?? true)) {
       let n = 1;
-      for (const joint of graph.joints.values()) lines.push(...PcfExporter.jointBlocks(joint, graph, boreUnits, n++, materials));
+      for (const joint of graph.joints.values()) {
+        const a = graph.ports.get(joint.portAId)?.componentId;
+        const b = graph.ports.get(joint.portBId)?.componentId;
+        if (!included(a) && !included(b)) continue;
+        lines.push(...PcfExporter.jointBlocks(joint, graph, boreUnits, weldNo.get(joint.id) ?? `W-${n}`, materials));
+        n++;
+      }
     }
 
     if (isogen && (options.includeMaterialsTable ?? true) && materials.size) {
@@ -289,7 +361,7 @@ export class PcfExporter {
     joint: Joint,
     graph: PipingGraph,
     boreUnits: 'INCH' | 'MM',
-    n: number,
+    weldNumber: string,
     materials: Map<string, string>
   ): string[] {
     const a = graph.ports.get(joint.portAId);
@@ -328,7 +400,7 @@ export class PcfExporter {
       `${IND}END-POINT ${point(joint.position)} ${bore}`,
       `${IND}END-POINT ${point(joint.position)} ${bore}`,
       `${IND}SKEY ${joint.fieldWeld ? 'WF' : joint.type === 'SOCKETWELD' ? 'SW' : 'WW'}`,
-      `${IND}WELD-NO ${joint.fieldWeld ? `${joint.fieldWeld}-` : 'W-'}${n}`,
+      `${IND}WELD-NO ${weldNumber}`,
       ...(joint.fieldWeld ? [`${IND}ERECTION-ITEM`] : [`${IND}FABRICATION-ITEM`]),
       ...(joint.fieldWeld === 'FFW' ? [`${IND}FIELD-FIT-ALLOWANCE ${joint.fieldAllowanceMm ?? 100}`] : [])
     ];

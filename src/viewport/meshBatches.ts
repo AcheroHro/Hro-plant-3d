@@ -74,7 +74,10 @@ export function isBatchable(root: THREE.Object3D): boolean {
   return ok && meshes > 0;
 }
 
-/** Las claves que empiezan con '#' (juntas, soportes) se dibujan pero no se eligen tocándolas */
+/** Clave de un soporte en las mallas fusionadas: '#support/<id>' */
+export const SUPPORT_KEY = '#support/';
+
+/** Las claves que empiezan con '#' (juntas, soportes) no son piezas: no llevan componentId */
 const pickableKey = (key: string) => !key.startsWith('#');
 
 /**
@@ -199,6 +202,8 @@ function mergePieces(material: THREE.Material, pieces: Piece[]): THREE.Mesh {
     } else {
       const proxy = new THREE.Object3D();
       if (p.owner !== null && pickableKey(p.owner)) proxy.userData = { componentId: p.owner };
+      // Los soportes se eligen aparte (no son piezas del grafo)
+      else if (p.owner?.startsWith(SUPPORT_KEY)) proxy.userData = { supportId: p.owner.slice(SUPPORT_KEY.length) };
       const owner: Owner = { key: p.owner, proxy, start: firstTriangle, count, box, saved: null };
       owners.push(owner);
       if (p.owner !== null) byId.set(p.owner, owner);

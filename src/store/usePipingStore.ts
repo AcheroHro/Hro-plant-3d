@@ -17,7 +17,7 @@ import {
 import { saveGraphToIndexedDb, loadActiveProject, ProjectRecord } from '../persistence/indexedDbStorage';
 import { detectPipingCollisions } from '../viewport/collision/collisionDetector';
 import { calculateElbowPlacement } from '../core/math/elbowSolver';
-import { SerializedGraphState, FieldWeldKind, Component, ComponentType, NippleEndFinish, Port, SpecFitting, SupportKind } from '../types/piping';
+import { SerializedGraphState, FieldWeldKind, Component, ComponentType, NippleEndFinish, Port, SpecFitting, SupportKind, SupportMark } from '../types/piping';
 import { PcfImporter } from '../core/importers/PcfImporter';
 import { RoutePlan, planConnectionRoutes } from '../core/routing/connectRoutes';
 import { applySlope, centerlineForElevation, deflect, elbowForBend, planOffset, trimmedTakeOff } from '../core/routing/routeMath';
@@ -150,6 +150,13 @@ export interface PipingState {
   addBranchOnPipe: (componentId: string, offsetMm: number, dir: THREE.Vector3, branchNd: number) => void;
   addSupportOnPipe: (componentId: string, offsetMm: number, kind: SupportKind) => void;
   removeSupport: (supportId: string) => void;
+  /** Soporte elegido para editar (tipo y tag de Plant, altura, giro) */
+  selectedSupportId: string | null;
+  setSelectedSupportId: (supportId: string | null) => void;
+  updateSupport: (
+    supportId: string,
+    patch: Partial<Pick<SupportMark, 'kind' | 'tag' | 'plantType' | 'heightMm' | 'rotationDeg'>>
+  ) => void;
   cancelConnect: () => void;
   /** Carga la spec y el proyecto activo; devuelve el proyecto abierto */
   initialize: () => Promise<ProjectRecord | null>;
@@ -422,6 +429,7 @@ export const usePipingStore = create<PipingState>((set, get) => {
     numpadValue: '1000', // 1000 mm de longitud inicial
     selectedPortId: null,
     selectedComponentId: null,
+    selectedSupportId: null,
     snappedPortId: null,
     collidingComponentIds: new Set<string>(),
     statusMessage: 'Listo para trazar.',
@@ -546,6 +554,7 @@ export const usePipingStore = create<PipingState>((set, get) => {
         lineNumber: state?.activeLineNumber || g.activeLineNumber || get().lineNumber,
         selectedPortId: last?.id ?? null,
         selectedComponentId: null,
+    selectedSupportId: null,
         snappedPortId: null,
         activeDirection: last ? last.direction.clone().normalize() : new THREE.Vector3(1, 0, 0),
         collidingComponentIds: detectPipingCollisions(g).collidingComponentIds,
@@ -1036,9 +1045,12 @@ export const usePipingStore = create<PipingState>((set, get) => {
         const mark = graph.addSupport(componentId, offsetMm, kind);
         saveGraphToIndexedDb(graph.serialize());
         const names: Record<SupportKind, string> = { APOYO: 'Apoyo', GUIA: 'Guía', ANCLAJE: 'Anclaje', COLGANTE: 'Colgante' };
+        // Queda elegido para completarle el tipo de Plant, el tag y la altura
         set({
           version: get().version + 1,
-          statusMessage: `${names[kind]} marcado en el caño, a elevación ${Math.round(mark.position.z)} mm de eje.`
+          selectedSupportId: mark.id,
+          selectedComponentId: null,
+          statusMessage: `${names[kind]} marcado en el caño, a elevación ${Math.round(mark.position.z)} mm de eje. Completá su tipo de Plant y su tag.`
         });
       } catch (e) {
         undoSnapshots.pop();
@@ -1052,7 +1064,35 @@ export const usePipingStore = create<PipingState>((set, get) => {
       pushUndoSnapshot();
       graph.removeSupport(supportId);
       saveGraphToIndexedDb(graph.serialize());
-      set({ version: get().version + 1, statusMessage: 'Soporte quitado.' });
+      set({
+        version: get().version + 1,
+        selectedSupportId: get().selectedSupportId === supportId ? null : get().selectedSupportId,
+        statusMessage: 'Soporte quitado.'
+      });
+    },
+
+    setSelectedSupportId: (supportId) => {
+      const mark = supportId ? get().graph.supports.get(supportId) : undefined;
+      if (!mark) return set({ selectedSupportId: null });
+      set({
+        selectedSupportId: mark.id,
+        selectedComponentId: null,
+        statusMessage: `Elegido: soporte ${mark.tag || mark.plantType || mark.kind.toLowerCase()}.`
+      });
+    },
+
+    updateSupport: (supportId, patch) => {
+      const { graph } = get();
+      if (!graph.supports.has(supportId)) return;
+      pushUndoSnapshot();
+      try {
+        const mark = graph.updateSupport(supportId, patch);
+        saveGraphToIndexedDb(graph.serialize());
+        set({ version: get().version + 1, statusMessage: `Soporte ${mark.tag || mark.plantType || mark.kind.toLowerCase()} actualizado.` });
+      } catch (e) {
+        undoSnapshots.pop();
+        set({ canUndo: undoSnapshots.length > 0, statusMessage: (e as Error).message });
+      }
     },
 
     setNominalDiameter: (nd) => {
@@ -1152,9 +1192,10 @@ export const usePipingStore = create<PipingState>((set, get) => {
 
     setSelectedComponentId: (compId) => {
       if (!compId) {
-        set({ selectedComponentId: null });
+        set({ selectedComponentId: null, selectedSupportId: null });
         return;
       }
+      if (get().selectedSupportId) set({ selectedSupportId: null });
       const comp = get().graph.components.get(compId);
       if (!comp) {
         set({ selectedComponentId: null });
@@ -2403,6 +2444,7 @@ export const usePipingStore = create<PipingState>((set, get) => {
         graph: newGraph,
         selectedPortId: null,
         selectedComponentId: null,
+    selectedSupportId: null,
         snappedPortId: null,
         collidingComponentIds: new Set(),
         version: get().version + 1,

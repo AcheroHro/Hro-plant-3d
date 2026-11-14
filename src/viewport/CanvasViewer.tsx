@@ -5,9 +5,9 @@ import { ViewCube } from './ViewCube';
 import { usePhoneLayout } from '../ui/useIsPhone';
 import { buildComponentObject } from './buildComponentMesh';
 import { disposeObject } from './geometries/geometryUtils';
-import { setPieceHidden, visibleBounds } from './meshBatches';
+import { setPieceHidden, SUPPORT_KEY, visibleBounds } from './meshBatches';
 import { IncrementalBatches } from './incrementalBatches';
-import { createModelMaterials, modelPieces, ModelMaterials } from './modelPieces';
+import { buildSupportObject, createModelMaterials, modelPieces, ModelMaterials } from './modelPieces';
 import { computeSpools } from '../core/spools/spoolEngine';
 import { SPOOL_COLORS, ERECTION_COLOR, FIELD_COLORS, FIELD_UNCHANGED_COLOR } from './spoolColors';
 import { useProjectStore } from '../store/useProjectStore';
@@ -29,6 +29,7 @@ export const CanvasViewer: React.FC = () => {
   const cameraMode = usePipingStore((s) => s.cameraMode);
   const selectedPortId = usePipingStore((s) => s.selectedPortId);
   const selectedComponentId = usePipingStore((s) => s.selectedComponentId);
+  const selectedSupportId = usePipingStore((s) => s.selectedSupportId);
   const cameraViewPreset = usePipingStore((s) => s.cameraViewPreset);
   const activeDirection = usePipingStore((s) => s.activeDirection);
   const numpadValue = usePipingStore((s) => s.numpadValue);
@@ -512,6 +513,10 @@ export const CanvasViewer: React.FC = () => {
       side: THREE.DoubleSide
     });
 
+    // El soporte elegido también se dibuja aparte, resaltado
+    const supportMark = selectedSupportId ? graph.supports.get(selectedSupportId) : undefined;
+    const supportHost = supportMark ? graph.supportHost(supportMark) : null;
+
     const highlighted = new Map<string, THREE.Material>();
     if (!multiMode && selectedComponentId) highlighted.set(selectedComponentId, selectedMaterial);
     for (const id of multiSelect) highlighted.set(id, multiMaterial);
@@ -531,6 +536,10 @@ export const CanvasViewer: React.FC = () => {
       overlay.add(obj);
       hidden.push([setPieceHidden(batches, id, true), id]);
     }
+    if (supportMark && supportHost && (!visibleIds || visibleIds.has(supportHost.id))) {
+      overlay.add(buildSupportObject(supportMark, supportHost, selectedMaterial));
+      hidden.push([setPieceHidden(batches, `${SUPPORT_KEY}${supportMark.id}`, true), `${SUPPORT_KEY}${supportMark.id}`]);
+    }
     pipeGroup.add(overlay);
 
     return () => {
@@ -539,7 +548,7 @@ export const CanvasViewer: React.FC = () => {
       // Solo se vuelve a prender lo que apagó este efecto (no lo apagado por una edición)
       for (const [changed, id] of hidden) setPieceHidden(changed, id, false);
     };
-  }, [graph, version, collidingComponentIds, spoolView, fieldView, fieldBaseline, isolation, selectedComponentId, multiSelect, multiMode]);
+  }, [graph, version, collidingComponentIds, spoolView, fieldView, fieldBaseline, isolation, selectedComponentId, selectedSupportId, multiSelect, multiMode]);
 
   // Bocas libres: anillo, esfera para tocar y flecha. Dependen de la boca activa, no de la pieza elegida
   useEffect(() => {
@@ -1246,6 +1255,14 @@ export const CanvasViewer: React.FC = () => {
         if (!handled && pipeGroupRef.current) {
           const compHits = raycaster.intersectObjects(pipeGroupRef.current.children, true);
           for (const hit of compHits) {
+            // Un soporte tocado se elige para editarlo (tipo y tag de Plant, altura, giro)
+            const supportId = hit.object.userData?.supportId as string | undefined;
+            if (supportId && inSection(hit.point) && !store.alignPicking && !store.multiMode) {
+              store.setSelectedSupportId(supportId);
+              if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate(15);
+              handled = true;
+              break;
+            }
             const compId = hit.object.userData?.componentId || hit.object.parent?.userData?.componentId;
             if (compId && inSection(hit.point)) {
               // Alinear: la pieza tocada da la referencia en vez de quedar elegida

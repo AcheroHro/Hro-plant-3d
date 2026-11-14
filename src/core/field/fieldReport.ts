@@ -13,6 +13,20 @@ export interface ReportNote {
   photos: SheetImage[];
 }
 
+/** Una soldadura de la línea, con la numeración de obra (SW-001, FW-001, FFW-001) */
+export interface ReportWeld {
+  number: string;
+  kind: 'SHOP' | 'FW' | 'FFW';
+  /** Tipo de unión: a tope, enchufe, olet */
+  type: string;
+  nominalDiameter: string;
+  spools: string;
+  /** Solo en las de ajuste en obra: sobrelargo que se deja en el caño (mm) */
+  allowanceMm?: number;
+}
+
+export const WELD_KIND_LABEL: Record<ReportWeld['kind'], string> = { SHOP: 'Taller', FW: 'Campo', FFW: 'Ajuste en obra' };
+
 export interface FieldReportInput {
   projectName: string;
   lineNumber?: string;
@@ -23,6 +37,10 @@ export interface FieldReportInput {
   date?: Date;
   changes: FieldChange[];
   notes: ReportNote[];
+  /** Soldaduras de la línea (lista para el mapa de soldaduras) */
+  welds?: ReportWeld[];
+  /** Si el isométrico de la línea, con los números de soldadura, va al final del informe */
+  weldMapIncluded?: boolean;
 }
 
 const W = 210;
@@ -152,6 +170,55 @@ export function buildFieldReport(input: FieldReportInput): Sheet[] {
   } else {
     text(M, y, 'No hay cambios de geometría ni de datos respecto del PCF de origen.', 3);
     y -= 10;
+  }
+
+  // Soldaduras con la numeración de obra. Plant solo numera con enteros; acá van SW, FW y FFW
+  const welds = input.welds ?? [];
+  if (welds.length) {
+    const wc = [M, M + 24, M + 58, M + 82, M + 102, W - M - 28, W - M];
+    const count = (k: ReportWeld['kind']) => welds.filter((w) => w.kind === k).length;
+    const weldHeader = () => {
+      ensure(18);
+      text(M, y, 'SOLDADURAS', 3.4, { bold: true });
+      text(
+        W - M,
+        y,
+        `${count('SHOP')} de taller (SW) · ${count('FW')} de campo (FW) · ${count('FFW')} de ajuste en obra (FFW)`,
+        2.6,
+        { align: 'r', layer: 'FADED' }
+      );
+      y -= 4;
+      line(M, y, W - M, y, 0.4);
+      y -= 4;
+      ['N.º', 'Tipo', 'Unión', 'Diámetro', 'Spool', 'Sobrelargo'].forEach((h, i) => text(wc[i] + 1, y, h, 2.6, { bold: true }));
+      y -= 2;
+      line(M, y, W - M, y, 0.3);
+    };
+    weldHeader();
+    for (const w of welds) {
+      const LH = 4.2;
+      if (y - LH < M + FOOT) {
+        newPage();
+        weldHeader();
+      }
+      const top = y - 3.2;
+      const field = w.kind !== 'SHOP';
+      text(wc[0] + 1, top, w.number, 2.8, { bold: true, layer: field ? 'FIELD' : 'TEXT' });
+      text(wc[1] + 1, top, WELD_KIND_LABEL[w.kind], 2.6, { layer: field ? 'FIELD' : 'TEXT' });
+      text(wc[2] + 1, top, w.type, 2.6);
+      text(wc[3] + 1, top, w.nominalDiameter, 2.6);
+      text(wc[4] + 1, top, fitText(w.spools || '—', 2.6, wc[5] - wc[4] - 2), 2.6);
+      text(wc[5] + 1, top, w.allowanceMm ? `+${w.allowanceMm} mm` : '—', 2.6);
+      y -= LH;
+      line(M, y, W - M, y, 0.1);
+    }
+    y -= 3;
+    if (input.weldMapIncluded) {
+      ensure(6);
+      text(M, y - 1, 'El mapa de soldaduras es el isométrico de la línea, al final del informe: cada número está en su unión.', 2.6, { layer: 'FADED' });
+      y -= 6;
+    }
+    y -= 5;
   }
 
   // Notas y fotos

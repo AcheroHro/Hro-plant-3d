@@ -6,6 +6,7 @@ import { usePipingStore } from '../store/usePipingStore';
 import { useUiConfigStore } from '../store/useUiConfigStore';
 import { pieceName } from '../core/pieceNames';
 import { TouchNumpad } from './TouchNumpad';
+import { SupportEditor } from './SupportEditor';
 import { usePhoneLayout, vibrate } from './useIsPhone';
 import {
   ActionIcon,
@@ -54,6 +55,7 @@ export const ContextDock: React.FC = () => {
   const selectedComponentId = usePipingStore((s) => s.selectedComponentId);
   const selectedPortId = usePipingStore((s) => s.selectedPortId);
   const multiMode = usePipingStore((s) => s.multiMode);
+  const selectedSupportId = usePipingStore((s) => s.selectedSupportId);
 
   if (!layout || multiMode) return null;
   if (mobilePanel && mobilePanel !== 'trazar') return null;
@@ -64,7 +66,7 @@ export const ContextDock: React.FC = () => {
 
   return (
     <section
-      aria-label={comp ? `Acciones de ${pieceName(comp.type)}` : 'Trazar'}
+      aria-label={selectedSupportId ? 'Soporte elegido' : comp ? `Acciones de ${pieceName(comp.type)}` : 'Trazar'}
       data-tour="dock"
       className={`fixed z-40 flex flex-col bg-[#161a22]/97 backdrop-blur-xl border-[#323946] shadow-2xl pointer-events-auto ${
         layout === 'portrait'
@@ -72,7 +74,13 @@ export const ContextDock: React.FC = () => {
           : 'right-0 bottom-0 mobile-sheet-top w-[min(380px,50vw)] border-l'
       }`}
     >
-      {comp ? <PieceDock comp={comp} openPort={openPort} /> : <PortDock openPort={openPort} />}
+      {selectedSupportId ? (
+        <SupportEditor docked />
+      ) : comp ? (
+        <PieceDock comp={comp} openPort={openPort} />
+      ) : (
+        <PortDock openPort={openPort} />
+      )}
     </section>
   );
 };

@@ -381,6 +381,12 @@ export interface SupportMark {
   position: THREE.Vector3;
   nominalDiameter: number;
   tag?: string;
+  /** Tipo de soporte de la spec de soportes de Plant 3D (por ejemplo Dummy Leg) */
+  plantType?: string;
+  /** Distancia desde el eje del caño hasta el punto de apoyo (mm); sin dato, la de siempre */
+  heightMm?: number;
+  /** Giro del soporte alrededor del eje del caño (grados) */
+  rotationDeg?: number;
 }
 
 export interface SerializedSupport {
@@ -389,6 +395,12 @@ export interface SerializedSupport {
   position: [number, number, number];
   nominalDiameter: number;
   tag?: string;
+  /** Tipo de soporte de la spec de soportes de Plant 3D (por ejemplo Dummy Leg) */
+  plantType?: string;
+  /** Distancia desde el eje del caño hasta el punto de apoyo (mm); sin dato, la de siempre */
+  heightMm?: number;
+  /** Giro del soporte alrededor del eje del caño (grados) */
+  rotationDeg?: number;
 }
 
 export interface SerializedJoint {
