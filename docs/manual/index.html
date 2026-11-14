@@ -1,0 +1,769 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Manual Achero Plant 3D</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Figtree:ital,wght@0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@500&display=swap">
+<style>
+/* Centro de ayuda: hoja clara con mucho aire, buscador grande arriba, categorías en tarjetas suaves y guías como artículos. Índice fijo a la izquierda en pantalla grande; panel deslizable en el celular. */
+:root {
+  --bg: #ffffff;
+  --soft: #f5f7fa;
+  --soft-2: #eef2f7;
+  --line: #e3e8ef;
+  --text: #1c2431;
+  --muted: #5d6879;
+  --accent: #1667c4;
+  --accent-soft: #eaf2fc;
+  --tip: #eaf2fc;
+  --tip-ink: #164f93;
+  --obra: #fff6e5;
+  --obra-ink: #7a4d00;
+  --warn: #fdeeee;
+  --warn-ink: #a12a2a;
+  --shadow: 0 1px 2px rgba(20, 30, 50, .06), 0 4px 16px rgba(20, 30, 50, .06);
+  --sans: "Figtree", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --mono: "IBM Plex Mono", Consolas, "Courier New", monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #12151b; --soft: #191d25; --soft-2: #20252f; --line: #2b313c; --text: #e9edf3; --muted: #9aa5b5;
+  --accent: #6aa8f0; --accent-soft: #1a2738; --tip: #17263a; --tip-ink: #9cc6f5; --obra: #2b2414; --obra-ink: #f0c56b;
+  --warn: #2f1a1c; --warn-ink: #f19a9a; --shadow: 0 1px 2px rgba(0,0,0,.4), 0 4px 16px rgba(0,0,0,.3); color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #12151b; --soft: #191d25; --soft-2: #20252f; --line: #2b313c; --text: #e9edf3; --muted: #9aa5b5;
+  --accent: #6aa8f0; --accent-soft: #1a2738; --tip: #17263a; --tip-ink: #9cc6f5; --obra: #2b2414; --obra-ink: #f0c56b;
+  --warn: #2f1a1c; --warn-ink: #f19a9a; --shadow: 0 1px 2px rgba(0,0,0,.4), 0 4px 16px rgba(0,0,0,.3); color-scheme: dark }
+
+* { box-sizing: border-box }
+body { background: var(--bg); color: var(--text); font: 400 17px/1.65 var(--sans) }
+a { color: var(--accent); text-underline-offset: 3px }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px }
+h1, h2, h3 { text-wrap: balance; letter-spacing: -.01em }
+
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 30; background: var(--bg) }
+.bar { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 20; background: color-mix(in srgb, var(--bg) 92%, transparent);
+  backdrop-filter: blur(8px); border-bottom: 1px solid var(--line);
+  padding-block: 10px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)) }
+.bar-in { max-width: 1180px; margin: 0 auto; display: flex; align-items: center; gap: 12px }
+.logo { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 16px; color: var(--text); text-decoration: none; white-space: nowrap }
+.logo i { width: 28px; height: 28px; border-radius: 7px; background: var(--accent); color: #fff; font: 700 11px/28px var(--sans); text-align: center; font-style: normal }
+.logo span { color: var(--muted); font-weight: 500 }
+.bar .q { margin-left: auto; width: min(320px, 40vw) }
+.menu { display: none; align-items: center; gap: 6px; font: 600 15px var(--sans); color: var(--text); background: var(--soft); border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; cursor: pointer }
+.menu svg { width: 18px; height: 18px }
+
+.search { position: relative; display: block }
+.search svg { position: absolute; left: 14px; top: 50%; transform: translateY(-50%); width: 18px; height: 18px; color: var(--muted); pointer-events: none }
+.search input { width: 100%; font: 400 16px var(--sans); color: var(--text); background: var(--soft); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px 10px 42px }
+.search input:focus { outline: none; border-color: var(--accent); background: var(--bg); box-shadow: 0 0 0 3px var(--accent-soft) }
+
+.wrap { max-width: 1180px; margin: 0 auto; display: grid; grid-template-columns: 250px minmax(0, 1fr); gap: 56px;
+  padding-block: 0 96px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)) }
+nav.toc { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 72px); align-self: start; max-height: calc(100vh - 90px); overflow-y: auto; padding: 28px 4px 24px 0; font-size: 14.5px }
+nav.toc .toc-head { display: none }
+nav.toc h2 { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 22px 0 6px 10px }
+nav.toc h2:first-of-type { margin-top: 0 }
+nav.toc a { display: block; padding: 5px 10px; border-radius: 8px; color: var(--text); text-decoration: none; line-height: 1.35 }
+nav.toc a:hover { background: var(--soft) }
+nav.toc a.on { background: var(--accent-soft); color: var(--accent); font-weight: 600 }
+nav.toc a.hide { display: none }
+.scrim { display: none }
+
+main { min-width: 0; padding-top: 28px }
+.hero { background: var(--soft); border-radius: 18px; padding: 40px clamp(20px, 4vw, 48px) 36px; margin-bottom: 28px }
+.hero small { font-size: 13px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--accent) }
+.hero h1 { font-size: clamp(30px, 4.6vw, 44px); line-height: 1.12; font-weight: 700; margin: 8px 0 10px }
+.hero p { margin: 0 0 22px; color: var(--muted); max-width: 58ch }
+.hero .search input { background: var(--bg); padding-block: 15px; font-size: 17px; border-radius: 12px; box-shadow: var(--shadow) }
+.hero .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; font-size: 14px; color: var(--muted); align-items: center }
+.hero .chips button { font: 500 14px var(--sans); color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 999px; padding: 4px 12px; cursor: pointer }
+.hero .chips button:hover { border-color: var(--accent); color: var(--accent) }
+
+.cats { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; margin-bottom: 12px }
+.cats a { display: flex; flex-direction: column; gap: 4px; padding: 18px 18px 16px; border: 1px solid var(--line); border-radius: 14px; text-decoration: none; color: var(--text); background: var(--bg); transition: border-color .15s, box-shadow .15s }
+.cats a:hover { border-color: var(--accent); box-shadow: var(--shadow) }
+.cats .ic { width: 36px; height: 36px; border-radius: 10px; background: var(--accent-soft); color: var(--accent); display: grid; place-items: center; margin-bottom: 6px }
+.cats .ic svg { width: 20px; height: 20px }
+.cats strong { font-size: 17px; font-weight: 700 }
+.cats span { font-size: 14.5px; color: var(--muted); line-height: 1.45 }
+.cats em { font-style: normal; font-size: 13px; color: var(--accent); font-weight: 600; margin-top: 6px }
+
+.empty { display: none; padding: 24px; background: var(--soft); border-radius: 12px; color: var(--muted) }
+
+h2.block { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; color: var(--accent); margin: 64px 0 0; scroll-margin-top: 90px }
+section.t { padding: 28px 0 8px; border-bottom: 1px solid var(--line); scroll-margin-top: 80px }
+section.t.hide { display: none }
+.thead { display: flex; align-items: center; gap: 10px 12px; flex-wrap: wrap }
+.num { font: 600 13px var(--mono); color: var(--muted); background: var(--soft); border-radius: 6px; padding: 2px 7px }
+section.t h3 { font-size: clamp(22px, 2.8vw, 27px); line-height: 1.2; font-weight: 700; margin: 0; flex-basis: 100%; order: 2 }
+.meta { font-size: 13px; color: var(--muted); display: inline-flex; align-items: center; gap: 5px }
+.meta::before { content: ""; width: 13px; height: 13px; border-radius: 50%; border: 1.5px solid currentColor; box-sizing: border-box }
+.goal { color: var(--muted); font-size: 18px; margin: 8px 0 20px; max-width: 62ch }
+
+ol.steps { list-style: none; counter-reset: s; padding: 0; margin: 0 0 18px; display: grid; gap: 14px; max-width: 68ch }
+ol.steps > li { counter-increment: s; display: grid; grid-template-columns: 30px minmax(0, 1fr); gap: 12px; align-items: start }
+ol.steps > li::before { content: counter(s); width: 28px; height: 28px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); font: 700 14px/28px var(--sans); text-align: center }
+ol.steps > li > div { padding-top: 1px }
+ul.plain { margin: 6px 0 14px; padding-left: 20px; max-width: 68ch }
+ul.plain li { margin: 5px 0 }
+
+.k { font: 500 13.5px/1 var(--mono); background: var(--soft-2); color: var(--text); border: 1px solid var(--line); padding: 3px 7px 4px; border-radius: 6px; white-space: nowrap; display: inline-block }
+.k.amber { background: var(--obra); color: var(--obra-ink); border-color: transparent }
+.v { font: 500 14.5px var(--mono) }
+
+.note { border-radius: 12px; padding: 14px 16px; margin: 16px 0; max-width: 68ch; display: grid; gap: 2px; font-size: 16px }
+.note b { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em }
+.note.tip { background: var(--tip) } .note.tip b { color: var(--tip-ink) }
+.note.obra { background: var(--obra) } .note.obra b { color: var(--obra-ink) }
+.note.warn { background: var(--warn) } .note.warn b { color: var(--warn-ink) }
+
+figure { margin: 18px 0 22px; max-width: 760px }
+figure img { display: block; width: 100%; height: auto; border-radius: 12px; border: 1px solid var(--line); box-shadow: var(--shadow); cursor: zoom-in; background: #12161f }
+figure.narrow { max-width: 340px }
+figure.mid { max-width: 520px }
+figcaption { font-size: 14px; color: var(--muted); margin-top: 8px }
+.pair { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 16px; max-width: 760px; align-items: start }
+.pair figure { margin: 0 }
+
+.tbl { overflow-x: auto; margin: 14px 0 20px; max-width: 760px; border: 1px solid var(--line); border-radius: 12px }
+table { border-collapse: collapse; width: 100%; font-size: 15.5px }
+th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--line); vertical-align: top }
+tr:last-child td { border-bottom: 0 }
+th { font-size: 13px; font-weight: 600; color: var(--muted); background: var(--soft) }
+
+.compass { display: grid; grid-template-columns: repeat(3, 62px); gap: 6px; margin: 12px 0; font: 500 13px var(--mono) }
+.compass span { background: var(--soft-2); border: 1px solid var(--line); text-align: center; padding: 9px 0; border-radius: 8px; line-height: 1.2 }
+.compass span small { display: block; font: 400 11px var(--sans); color: var(--muted) }
+
+dl.gl { display: grid; grid-template-columns: minmax(110px, 190px) minmax(0, 1fr); gap: 10px 20px; max-width: 760px; margin: 16px 0 }
+dl.gl dt { font-weight: 600 }
+dl.gl dd { margin: 0; color: var(--muted) }
+footer { margin-top: 48px; color: var(--muted); font-size: 14px }
+
+dialog { border: 0; padding: 0; background: transparent; max-width: 96vw; max-height: 94vh }
+dialog::backdrop { background: rgba(10, 14, 20, .82) }
+dialog img { max-width: 96vw; max-height: 90vh; display: block; border-radius: 10px }
+dialog button { position: absolute; top: 10px; right: 10px; font: 600 15px var(--sans); background: #fff; color: #1c2431; border: 0; border-radius: 8px; padding: 8px 12px; cursor: pointer }
+
+@media (max-width: 900px) {
+  .wrap { grid-template-columns: minmax(0, 1fr); gap: 0 }
+  .bar .q { display: none }
+  .menu { display: inline-flex; margin-left: auto }
+  nav.toc { position: fixed; z-index: 40; top: 0; bottom: 0; left: 0; width: min(330px, 86vw); max-height: none; background: var(--bg); box-shadow: 0 0 40px rgba(0,0,0,.25);
+    padding: calc(env(safe-area-inset-top, 0px) + 14px) 14px calc(env(safe-area-inset-bottom, 0px) + 24px) max(14px, env(safe-area-inset-left, 0px));
+    transform: translateX(-105%); visibility: hidden; transition: transform .22s ease, visibility 0s .22s }
+  nav.toc.open { transform: none; visibility: visible; transition: transform .22s ease }
+  nav.toc .toc-head { display: flex; align-items: center; justify-content: space-between; margin: 0 0 14px 10px; font-weight: 700; font-size: 17px }
+  nav.toc .toc-head button { font: 600 15px var(--sans); background: var(--soft); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 6px 12px; cursor: pointer }
+  .scrim { position: fixed; inset: 0; z-index: 35; background: rgba(10, 14, 20, .45) }
+  .scrim.open { display: block }
+  main { padding-top: 16px }
+  .hero { padding: 28px 18px 24px; border-radius: 14px }
+  ol.steps > li { gap: 10px }
+}
+@media (prefers-reduced-motion: reduce) { nav.toc, nav.toc.open { transition: none } }
+@media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth } }
+</style>
+
+<header class="bar">
+  <div class="bar-in">
+    <a class="logo" href="#inicio"><i>P3D</i>Achero Plant 3D <span>Ayuda</span></a>
+    <label class="search q" for="q2"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><input id="q2" type="search" placeholder="Buscar en la ayuda" autocomplete="off" aria-label="Buscar en la ayuda"></label>
+    <button class="menu" id="tocbtn" type="button" aria-expanded="false" aria-controls="toc"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>Índice</button>
+  </div>
+</header>
+
+<div class="scrim" id="scrim"></div>
+<div class="wrap">
+<nav class="toc" id="toc" aria-label="Índice de guías"></nav>
+
+<main id="main">
+<div class="hero" id="inicio">
+  <small>Centro de ayuda</small>
+  <h1>¿Qué querés hacer?</h1>
+  <p>31 guías cortas para corregir cañerías en obra y devolverlas a Plant 3D. Si es tu primera vez, empezá por las cuatro de Primeros pasos.</p>
+  <label class="search" for="q"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><input id="q" type="search" placeholder="Buscá: codo, spool, foto, exportar PCF…" autocomplete="off" aria-label="Buscar en la ayuda"></label>
+  <div class="chips"><span>Más buscado:</span><button type="button" data-q="trazar">Trazar</button><button type="button" data-q="paletas">Paletas</button><button type="button" data-q="exportar">Exportar PCF</button><button type="button" data-q="foto">Fotos</button></div>
+</div>
+
+<div class="cats">
+  <a href="#b-empezar"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg></div><strong>Primeros pasos</strong><span>Instalar, conocer la pantalla, paletas y moverse en 3D</span><em>4 guías</em></a>
+  <a href="#b-modelar"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V9a5 5 0 0 1 5-5h11"/><path d="M4 20h4M16 4v4"/></svg></div><strong>Modelar desde cero</strong><span>Proyecto nuevo, trazar, codos, accesorios y catálogo</span><em>9 guías</em></a>
+  <a href="#b-corregir"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="m13.5 6.5 4 4"/></svg></div><strong>Corregir</strong><span>Propiedades, largos, intercalar piezas, girar y borrar</span><em>7 guías</em></a>
+  <a href="#b-plant"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7h11l-3-3M17 17H6l3 3"/></svg></div><strong>Ida y vuelta con Plant 3D</strong><span>Abrir el PCF, devolverlo a Plant y pasar proyectos</span><em>3 guías</em></a>
+  <a href="#b-taller"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/></svg></div><strong>Taller</strong><span>Lista de cortes, spools, planos PDF y DXF</span><em>4 guías</em></a>
+  <a href="#b-obra"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 16h16v3H4zM6 16a6 6 0 0 1 12 0M12 7V5"/></svg></div><strong>En obra</strong><span>Qué cambió, notas con fotos, informe y sin señal</span><em>4 guías</em></a>
+</div>
+
+<p class="empty" id="empty">No encontramos guías con esa palabra. Probá con otra, por ejemplo “caño”, “brida” o “exportar”.</p>
+
+<h2 class="block" id="b-empezar">Primeros pasos</h2>
+
+<section class="t" id="t01" data-title="Instalar la app en el celular y en la PC">
+  <div class="thead"><span class="num">01</span><h3>Instalar la app en el celular y en la PC</h3><span class="meta">3 min</span></div>
+  <p class="goal">Instalada, la app abre como cualquier otra, sin barra del navegador, y funciona sin señal en la obra.</p>
+  <ol class="steps">
+    <li><div>Abrí en Chrome (Android o PC) la dirección de la app que te pasó la oficina técnica.</div></li>
+    <li><div>Esperá unos segundos a que termine de cargar. La primera vez se baja todo lo necesario para trabajar sin señal, incluidas las specs y el motor de base de datos.</div></li>
+    <li><div>Tocá <span class="k">Proyecto ▾</span> arriba a la izquierda y después <span class="k">⤓ Instalar la app en este equipo</span>. Si ese botón no aparece, abrí el menú <span class="k">⋮</span> de Chrome y elegí <span class="k">Instalar app</span> o <span class="k">Agregar a pantalla principal</span>.</div></li>
+    <li><div>Buscá el ícono azul con el codo y las bridas naranjas en la pantalla de inicio, y abrila desde ahí.</div></li>
+  </ol>
+  <div class="note tip"><b>iPhone</b><span>En Safari tocá Compartir y después <span class="k">Agregar a inicio</span>. Todo funciona igual, salvo abrir un PCF con “Compartir” desde otra app (en iPhone abrilo con el botón de la app).</span></div>
+  <div class="note obra"><b>En obra</b><span>Abrila una vez con señal antes de ir. Cuando abajo aparece “✓ Lista para usar sin señal en obra”, ya podés trabajar sin conexión.</span></div>
+</section>
+
+<section class="t" id="t02" data-title="Conocer la pantalla">
+  <div class="thead"><span class="num">02</span><h3>Conocer la pantalla</h3><span class="meta">4 min</span></div>
+  <p class="goal">La pantalla imita a Plant 3D: una cinta de botones arriba, el modelo 3D en el centro y paletas flotantes que podés mover.</p>
+  <figure><img src="img/pantalla.jpg" alt="Pantalla principal con la cinta superior, el modelo 3D, la paleta Piezas a la izquierda, el ViewCube a la derecha y la Línea de comando abajo" loading="lazy" width="800" height="600"><figcaption>Pantalla principal con un proyecto de ejemplo.</figcaption></figure>
+  <figure><img src="img/barra.png" alt="Cinta superior: Proyecto, Campo, Line Number, Spec, Size, Propiedades, +SPEC, Abrir PCF, Exportar PCF y Vista libre" loading="lazy" width="800" height="72"><figcaption>La cinta superior. En el celular se desliza de costado para ver todos los botones.</figcaption></figure>
+  <div class="tbl"><table>
+    <tr><th>Zona</th><th>Para qué sirve</th></tr>
+    <tr><td><span class="k">Proyecto ▾</span></td><td>Proyectos guardados en el equipo (guía 23).</td></tr>
+    <tr><td><span class="k amber">Campo</span></td><td>Cambios respecto de Plant, notas con fotos e informe (bloque En obra).</td></tr>
+    <tr><td>Line Number, Spec, Size</td><td>Línea, especificación y diámetro con que se traza lo próximo.</td></tr>
+    <tr><td><span class="k">Propiedades</span></td><td>Despliega los datos de la pieza seleccionada.</td></tr>
+    <tr><td><span class="k">+SPEC</span> <span class="k">ABRIR PCF</span> <span class="k">EXPORTAR PCF</span></td><td>Cargar una spec de Plant, abrir un PCF y bajar el PCF corregido.</td></tr>
+    <tr><td><span class="k">Vista Libre</span> / <span class="k">Route Pipe</span></td><td>Si la cámara sigue o no a la boca donde estás trazando.</td></tr>
+    <tr><td><span class="k">↩</span> <span class="k">↪</span> <span class="k">EXT</span></td><td>Deshacer, rehacer y encuadrar todo el modelo.</td></tr>
+    <tr><td><span class="k">Spools</span> <span class="k">Lista de Cortes</span> <span class="k">Iso / DXF</span></td><td>Salidas para taller: spools, cortes y planos.</td></tr>
+    <tr><td><span class="k">↺</span></td><td>Vacía el modelo del proyecto abierto (se puede deshacer).</td></tr>
+    <tr><td>Línea de estado</td><td>La franja debajo de la cinta. Muestra lo último que hizo la app, o por qué no pudo hacerlo. A la derecha: línea, spec y diámetro activos.</td></tr>
+  </table></div>
+  <div class="note tip"><b>Consejo</b><span>Si algo no pasa como esperabas, leé la línea de estado: casi siempre dice el motivo, por ejemplo “La spec no tiene esta pieza en este diámetro”.</span></div>
+</section>
+
+<section class="t" id="t03" data-title="Mostrar, ocultar y acomodar las paletas">
+  <div class="thead"><span class="num">03</span><h3>Mostrar, ocultar y acomodar las paletas</h3><span class="meta">3 min</span></div>
+  <p class="goal">Hay cinco paletas flotantes. En el celular conviene dejar a la vista solo las que estás usando.</p>
+  <div class="tbl"><table>
+    <tr><th>Paleta</th><th>Qué tiene</th></tr>
+    <tr><td>Piezas</td><td>Botones para insertar caño, codos, tes, brida, válvula, reducción y tapa, y el catálogo completo.</td></tr>
+    <tr><td>Propiedades</td><td>Datos y acciones de la pieza seleccionada.</td></tr>
+    <tr><td>ViewCube</td><td>Vistas (TOP, FRONT, RIGHT, ISO) y la dirección en que se traza.</td></tr>
+    <tr><td>Línea de comando</td><td>El largo a trazar y el botón TRAZAR.</td></tr>
+    <tr><td>Bocas libres</td><td>Cuántos extremos abiertos tiene el modelo y el botón para saltar entre ellos. Aparece sola cuando hay bocas libres.</td></tr>
+  </table></div>
+  <ol class="steps">
+    <li><div><strong>Mostrar u ocultar:</strong> en la fila de arriba a la derecha, tocá <span class="k">Piezas</span>, <span class="k">Propiedades</span>, <span class="k">ViewCube</span> o <span class="k">Comando</span>. Encendido es que está a la vista.</div></li>
+    <li><div><strong>Mover:</strong> arrastrá la paleta tomándola del título (la zona con los puntitos <span class="v">⠿</span>).</div></li>
+    <li><div><strong>Plegar:</strong> el botón <span class="k">—</span> del título la deja solo con el encabezado. Tocalo de nuevo para desplegarla.</div></li>
+    <li><div><strong>Cerrar:</strong> el botón <span class="k">✕</span>. Se vuelve a abrir desde la fila de arriba.</div></li>
+    <li><div><strong>Ordenar todo:</strong> <span class="k amber">⊞ Reset Vista</span> devuelve todas las paletas a su lugar y las vuelve a mostrar, incluida Bocas libres.</div></li>
+  </ol>
+  <figure class="narrow"><img src="img/piezas.png" alt="Paleta Piezas en una columna con el botón 1C en el título" loading="lazy" width="134" height="392" style="max-width:150px"><figcaption>El botón <span class="k">1C</span> del título de Piezas cambia entre una columna, dos columnas (2C) y fila horizontal (⇄).</figcaption></figure>
+  <div class="note tip"><b>Consejo</b><span>La app recuerda dónde dejaste cada paleta, también después de cerrarla. En el celular, una buena disposición es Piezas en fila horizontal arriba, Comando abajo y ViewCube plegado hasta que lo necesites.</span></div>
+</section>
+
+<section class="t" id="t04" data-title="Moverse en 3D">
+  <div class="thead"><span class="num">04</span><h3>Moverse en 3D</h3><span class="meta">3 min</span></div>
+  <p class="goal">Girar, acercarse y encuadrar el modelo sin tocar nada por error.</p>
+  <div class="tbl"><table>
+    <tr><th>Querés</th><th>Celular o tablet</th><th>PC</th></tr>
+    <tr><td>Girar alrededor del modelo</td><td>Arrastrar con un dedo</td><td>Arrastrar con el botón izquierdo</td></tr>
+    <tr><td>Acercar o alejar</td><td>Pellizcar con dos dedos</td><td>Rueda del mouse</td></tr>
+    <tr><td>Desplazar la vista</td><td>Arrastrar con dos dedos</td><td>—</td></tr>
+    <tr><td>Seleccionar una pieza o una boca</td><td>Tocarla sin arrastrar</td><td>Clic sin arrastrar</td></tr>
+    <tr><td>Soltar la selección</td><td>Tocar el fondo vacío</td><td>Clic en el fondo</td></tr>
+  </table></div>
+  <ol class="steps">
+    <li><div>Si te perdiste, tocá <span class="k">EXT</span>: encuadra todo el modelo.</div></li>
+    <li><div>Para una vista exacta usá los botones del ViewCube: <span class="k">TOP</span> (planta), <span class="k">FRONT</span>, <span class="k">RIGHT</span> o <span class="k">ISO</span>.</div></li>
+    <li><div>Con <span class="k">Route Pipe</span> encendido, la cámara se centra sola en la boca donde estás trazando. Con <span class="k">Vista Libre</span> la cámara se queda donde la dejaste.</div></li>
+  </ol>
+  <div class="note tip"><b>Consejo</b><span>Las bocas libres se ven como anillos. Al acercar el dedo a una, la mira se pega a ella y aparece el cartel “PUERTO ANCLADO”, así es fácil tocarla con precisión.</span></div>
+</section>
+
+<h2 class="block" id="b-modelar">Modelar desde cero</h2>
+
+<section class="t" id="t05" data-title="Empezar un proyecto nuevo">
+  <div class="thead"><span class="num">05</span><h3>Empezar un proyecto nuevo</h3><span class="meta">2 min</span></div>
+  <p class="goal">Cada trabajo va en su propio proyecto. Se guarda solo en el equipo cada vez que cambiás algo.</p>
+  <ol class="steps">
+    <li><div>Tocá <span class="k">Proyecto ▾</span> y después <span class="k">+ Proyecto vacío</span>. Se abre un modelo en blanco llamado “Proyecto 2”, “Proyecto 3”…</div></li>
+    <li><div>Para ponerle nombre, en la misma ventana tocá <span class="k">Renombrar</span> en su tarjeta, escribí el nombre (por ejemplo “Skid ácido · línea 300”) y <span class="k">OK</span>.</div></li>
+    <li><div>Cerrá la ventana con <span class="k">✕</span>. En el campo <strong>Line Number</strong> de la cinta escribí el número de línea, como en Plant: <span class="v">300-CS150-2"</span>.</div></li>
+    <li><div>Revisá que la <strong>Spec</strong> sea la del proyecto (guía 06) y elegí el diámetro en <strong>Size (ND)</strong>.</div></li>
+  </ol>
+  <figure class="mid"><img src="img/proyectos.jpg" alt="Ventana Proyectos en este equipo con los botones Abrir PCF y Proyecto vacío y la lista de proyectos" loading="lazy" width="800" height="600"><figcaption>Ventana de proyectos. El abierto se marca en azul.</figcaption></figure>
+  <div class="note tip"><b>Consejo</b><span>No hace falta guardar. Si cerrás la app o se apaga el celular, al volver a abrirla aparece el último proyecto como lo dejaste.</span></div>
+</section>
+
+<section class="t" id="t06" data-title="Elegir o cargar la spec">
+  <div class="thead"><span class="num">06</span><h3>Elegir o cargar la spec</h3><span class="meta">3 min</span></div>
+  <p class="goal">La spec decide qué caños, codos, bridas y válvulas puede usar la app, igual que en Plant 3D.</p>
+  <ol class="steps">
+    <li><div><strong>Spec integrada:</strong> en el selector <strong>Spec</strong> de la cinta elegí una de las que vienen con la app (RCI1, CS150, CS300, SS150).</div></li>
+    <li><div><strong>Spec de tu proyecto de Plant:</strong> tocá <span class="k">+SPEC</span> y elegí juntos, en el mismo paso, estos archivos de la carpeta de specs del proyecto de Plant:
+      <ul class="plain"><li>la <span class="v">.pspc</span> de la spec (obligatoria),</li><li>su <span class="v">.pspx</span> (para respetar las prioridades de Plant),</li><li>el <span class="v">DefaultConnectorsConfig.xml</span> del proyecto (para las uniones y juntas).</li></ul></div></li>
+    <li><div>Leé la línea de estado: dice cuántas piezas y diámetros tiene la spec y si falta algún archivo.</div></li>
+  </ol>
+  <div class="note warn"><b>Ojo</b><span>Usá la misma spec con que se modeló en Plant. Si la spec de la app no coincide, Plant puede rechazar piezas al cargar el PCF de vuelta.</span></div>
+  <div class="note obra"><b>En obra</b><span>La última spec usada queda guardada en el equipo y se abre sin señal. Cargala con conexión antes de salir.</span></div>
+</section>
+
+<section class="t" id="t07" data-title="Trazar el primer tramo de caño">
+  <div class="thead"><span class="num">07</span><h3>Trazar el primer tramo de caño</h3><span class="meta">3 min</span></div>
+  <p class="goal">Se traza como en Plant: elegís hacia dónde, cuánto, y tocás TRAZAR. Las medidas son de eje a eje.</p>
+  <ol class="steps">
+    <li><div>En el ViewCube, en <strong>Dirección de trazado</strong>, tocá hacia dónde va el caño. La dirección elegida queda en celeste.
+      <div class="compass" aria-hidden="true"><span>NO</span><span>+Y<small>Norte</small></span><span>NE</span><span>−X<small>Oeste</small></span><span>WCS</span><span>+X<small>Este</small></span><span>SO</span><span>−Y<small>Sur</small></span><span>SE</span></div>
+      Igual que en Plant: X es el Este, Y es el Norte y Z es arriba.</div></li>
+    <li><div>En la <strong>Línea de comando</strong> poné el largo en milímetros: tocá un preset (<span class="k">250</span> a <span class="k">6000</span>), escribilo en <strong>Largo</strong>, o sumá con <span class="k">+100</span> y <span class="k">+500</span>.</div></li>
+    <li><div>Tocá <span class="k">📐 TRAZAR</span> (en la PC también sirve Enter). El caño aparece desde el origen y su extremo queda como boca activa.</div></li>
+    <li><div>Para seguir derecho, poné otro largo y volvé a tocar TRAZAR.</div></li>
+  </ol>
+  <div class="pair">
+    <figure><img src="img/comando.png" alt="Línea de comando con presets, el campo Largo en 900 mm, los botones +100 y +500, TRAZAR y el teclado numérico desplegado" loading="lazy" width="427" height="242"><figcaption>Línea de comando con el teclado desplegado (botón <span class="k">Teclado</span>).</figcaption></figure>
+    <figure class="narrow"><img src="img/viewcube.png" alt="Paleta ViewCube con TOP, FRONT, RIGHT, ISO, la rosa de direcciones y los botones +Z y −Z" loading="lazy" width="128" height="194" style="max-width:190px"><figcaption>ViewCube: vistas arriba, dirección de trazado abajo.</figcaption></figure>
+  </div>
+  <div class="note tip"><b>Consejo</b><span>El botón <span class="k">Teclado</span> despliega números grandes para usar con guantes. <span class="k">C</span> borra todo, <span class="k">⌫</span> borra el último número y <span class="k">+1000</span> suma un metro.</span></div>
+</section>
+
+<section class="t" id="t08" data-title="Doblar con codos automáticos">
+  <div class="thead"><span class="num">08</span><h3>Doblar con codos automáticos</h3><span class="meta">2 min</span></div>
+  <p class="goal">Para doblar no hace falta poner el codo a mano: elegís la nueva dirección y la app lo pone.</p>
+  <ol class="steps">
+    <li><div>Con la boca activa al final de un caño, tocá en el ViewCube la nueva dirección. Por ejemplo, venías al Este (<span class="k">+X</span>) y ahora vas al Norte (<span class="k">+Y</span>).</div></li>
+    <li><div>Poné el largo del tramo nuevo y tocá <span class="k">TRAZAR</span>.</div></li>
+    <li><div>La app pone el codo de 90° de la spec en el vértice y descuenta del caño anterior lo que ocupa el codo. Las medidas siguen siendo de eje a eje, al vértice.</div></li>
+    <li><div>Para un codo de 45°, elegí una diagonal (<span class="k">NE</span>, <span class="k">NO</span>, <span class="k">SE</span>, <span class="k">SO</span>).</div></li>
+  </ol>
+  <div class="note warn"><b>Ojo</b><span>No se puede volver sobre el mismo eje (180°): la app avisa “Dirección opuesta”. Tampoco deja tramos más cortos que el niple mínimo (el doble del diámetro exterior, y nunca menos de 50 mm).</span></div>
+  <div class="note tip"><b>Otra forma</b><span>Los botones <span class="k">Codo 90°</span> y <span class="k">Codo 45°</span> de la paleta Piezas ponen solo el codo en la boca activa, girado hacia la dirección elegida en el ViewCube. Después seguís trazando desde el codo.</span></div>
+</section>
+
+<section class="t" id="t09" data-title="Subir y bajar de cota">
+  <div class="thead"><span class="num">09</span><h3>Subir y bajar de cota</h3><span class="meta">1 min</span></div>
+  <p class="goal">Para subir o bajar se usan los dos botones de abajo del ViewCube.</p>
+  <ol class="steps">
+    <li><div>Tocá <span class="k">▲ +Z</span> para subir o <span class="k">▼ −Z</span> para bajar.</div></li>
+    <li><div>Poné cuánto sube o baja (de eje a eje) y tocá <span class="k">TRAZAR</span>. El codo se pone solo, como en cualquier giro.</div></li>
+    <li><div>Para ver a qué altura quedó un caño, seleccionalo y mirá en Propiedades <strong>Eje Z</strong> (altura del eje) y <strong>BOP</strong> (fondo del caño).</div></li>
+  </ol>
+</section>
+
+<section class="t" id="t10" data-title="Insertar accesorios con la paleta Piezas">
+  <div class="thead"><span class="num">10</span><h3>Insertar accesorios con la paleta Piezas</h3><span class="meta">3 min</span></div>
+  <p class="goal">Cada botón pone la pieza de la spec en la boca activa, con sus juntas y espárragos cuando corresponde.</p>
+  <div class="tbl"><table>
+    <tr><th>Botón</th><th>Qué hace</th></tr>
+    <tr><td><span class="k">Caño</span></td><td>Tramo recto en la dirección de la boca, con el largo de la Línea de comando.</td></tr>
+    <tr><td><span class="k">Codo 90°</span> <span class="k">Codo 45°</span></td><td>Codo hacia la dirección elegida en el ViewCube.</td></tr>
+    <tr><td><span class="k">Te Línea</span></td><td>Te igual, y seguís por la línea principal.</td></tr>
+    <tr><td><span class="k">Te Ramal</span></td><td>Te igual, y seguís por el ramal a 90°.</td></tr>
+    <tr><td><span class="k">Brida</span></td><td>Brida de la spec con su junta y espárragos.</td></tr>
+    <tr><td><span class="k">Válvula</span></td><td>Válvula bridada con dos juntas y dos juegos de espárragos.</td></tr>
+    <tr><td><span class="k">Reducc.</span></td><td>Reducción concéntrica al diámetro siguiente más chico que tenga la spec.</td></tr>
+    <tr><td><span class="k">Tapa</span></td><td>Casquete (cap) que cierra la boca.</td></tr>
+    <tr><td><span class="k amber">Catálogo</span></td><td>Abre todas las piezas de la spec (guía 13).</td></tr>
+  </table></div>
+  <ol class="steps">
+    <li><div>Asegurate de que la boca activa sea la correcta: es la que se ve resaltada. Si no, tocá la boca que querés en 3D.</div></li>
+    <li><div>Tocá el botón de la pieza. La pieza aparece y la boca activa pasa a su otro extremo.</div></li>
+    <li><div>Leé la línea de estado: dice qué pieza exacta de la spec se usó.</div></li>
+  </ol>
+  <div class="note tip"><b>Brida automática</b><span>Si trazás un caño desde la cara de una brida o una válvula, la app pone antes la brida de la spec con su junta, igual que AutoFlange en Plant.</span></div>
+  <div class="note warn"><b>Ojo</b><span>Si la línea de estado dice “Geometría aproximada”, esa pieza no está verificada contra Plant: revisala al cargar el PCF en Plant.</span></div>
+</section>
+
+<section class="t" id="t11" data-title="Tees, ramales y bocas libres">
+  <div class="thead"><span class="num">11</span><h3>Tees, ramales y bocas libres</h3><span class="meta">3 min</span></div>
+  <p class="goal">Cada te deja una boca abierta. Esto es cómo pasar de una boca a otra para terminar todas las ramas.</p>
+  <ol class="steps">
+    <li><div>Para elegir hacia dónde sale el ramal antes de ponerla, abrí <span class="k amber">Catálogo</span>, buscá la Te y tocá la dirección en <strong>Ramal hacia</strong> (<span class="k">+Z</span>, <span class="k">−Z</span>, <span class="k">+Y</span>, <span class="k">−Y</span>…). Después <span class="k">Seguir</span> o <span class="k">Ramal</span>.</div></li>
+    <li><div>La paleta <strong>Bocas libres</strong> muestra cuántas bocas abiertas hay. Tocá <span class="k">⇄ Cambiar Boca/Ramal</span> para saltar a la siguiente.</div></li>
+    <li><div>También podés tocar directamente el anillo de una boca en 3D.</div></li>
+    <li><div>Con una te seleccionada, en Propiedades tenés <span class="k">Seguir Línea (#2)</span> y <span class="k">Salir Ramal (#3)</span> para elegir desde qué boca seguir.</div></li>
+  </ol>
+  <div class="note tip"><b>Consejo</b><span>Antes de exportar, mirá que en Bocas libres queden solo los extremos que de verdad van abiertos, como los empalmes con otras líneas o los equipos.</span></div>
+</section>
+
+<section class="t" id="t12" data-title="Cambiar de diámetro con una reducción">
+  <div class="thead"><span class="num">12</span><h3>Cambiar de diámetro con una reducción</h3><span class="meta">1 min</span></div>
+  <p class="goal">Para pasar de 3" a 2", la reducción se pone sola al cambiar el diámetro.</p>
+  <ol class="steps">
+    <li><div>Con la boca activa en el extremo donde cambia el diámetro, elegí el nuevo valor en <strong>Size (ND)</strong> de la cinta.</div></li>
+    <li><div>La app pone la reducción de la spec entre los dos diámetros y deja la boca activa del lado nuevo.</div></li>
+    <li><div>Seguí trazando: todo lo que viene ya sale en el diámetro nuevo.</div></li>
+  </ol>
+  <div class="note warn"><b>Ojo</b><span>Si la spec no tiene esa reducción (por ejemplo 3" × 1-1/2"), la línea de estado lo avisa. Pasá por un diámetro intermedio o cambiá la spec.</span></div>
+</section>
+
+<section class="t" id="t13" data-title="Usar el catálogo completo y fijar familias">
+  <div class="thead"><span class="num">13</span><h3>Usar el catálogo completo y fijar familias</h3><span class="meta">3 min</span></div>
+  <p class="goal">El catálogo muestra qué pieza exacta va a usar la app en cada tipo, y te deja elegir otra familia de la spec.</p>
+  <figure><img src="img/catalogo.jpg" alt="Ventana Paleta de piezas con selector de Size, y bloques Caño, Codo, Tee y Brida con su pieza de la spec y las familias para elegir" loading="lazy" width="800" height="600"></figure>
+  <ol class="steps">
+    <li><div>Tocá <span class="k amber">Catálogo</span> en la paleta Piezas.</div></li>
+    <li><div>Arriba elegí el diámetro (<strong>Size</strong>). Cada bloque muestra la pieza que se va a usar. La marca de adelante dice cuánto se confía en su geometría: <span class="v">✓</span> verificada con Plant, <span class="v">≈</span> según norma, <span class="v">!</span> aproximada.</div></li>
+    <li><div>Si la spec tiene varias familias (por ejemplo, brida slip-on o socket-weld), tocá la que quieras. <span class="k">Auto (spec)</span> vuelve al orden de prioridad de Plant.</div></li>
+    <li><div>Insertá con los botones de cada bloque: <span class="k">Insertar</span>, <span class="k">90°</span> o <span class="k">45°</span>, <span class="k">Seguir</span> o <span class="k">Ramal</span>, y en reducciones elegí a qué diámetro en <strong>Reduce a</strong>.</div></li>
+  </ol>
+  <div class="note tip"><b>Consejo</b><span>La familia que fijás queda recordada para esa spec, también la próxima vez que abras la app.</span></div>
+</section>
+
+<h2 class="block" id="b-corregir">Corregir</h2>
+
+<section class="t" id="t14" data-title="Seleccionar una pieza y ver sus propiedades">
+  <div class="thead"><span class="num">14</span><h3>Seleccionar una pieza y ver sus propiedades</h3><span class="meta">2 min</span></div>
+  <p class="goal">Seleccionar una pieza es el primer paso para corregirla.</p>
+  <ol class="steps">
+    <li><div>Tocá la pieza en 3D. Se pinta de celeste y la línea de estado dice cuál es.</div></li>
+    <li><div>Tocá <span class="k">Propiedades</span> en la cinta (o en el título de la paleta Propiedades) para desplegar sus datos.</div></li>
+    <li><div>Lo que vas a ver, por secciones: <strong>Identificación</strong> (marca, línea, spec, descripción y extremos), <strong>Geometría</strong> (diámetro, schedule, diámetro exterior, espesor, largo), <strong>Extremos y uniones</strong>, <strong>Coordenadas</strong> (Eje Z y BOP) y <strong>Acciones</strong>.</div></li>
+    <li><div><span class="k">Plegar</span> la achica de nuevo sin perder la selección.</div></li>
+  </ol>
+  <figure class="mid"><img src="img/propiedades.jpg" alt="Paleta Propiedades desplegada sobre un caño de 2 pulgadas con marca, line number, spec, largo neto 1462 mm y extremos Plano" loading="lazy" width="800" height="600"></figure>
+  <div class="note warn"><b>Ojo</b><span>Una pieza que se choca con otra se pinta de rojo. Revisá esa zona antes de exportar.</span></div>
+</section>
+
+<section class="t" id="t15" data-title="Elegir qué datos muestra Propiedades">
+  <div class="thead"><span class="num">15</span><h3>Elegir qué datos muestra Propiedades</h3><span class="meta">1 min</span></div>
+  <p class="goal">En el celular conviene ver solo lo justo. Cada uno arma su paleta.</p>
+  <ol class="steps">
+    <li><div>Con Propiedades desplegada, tocá el engranaje <span class="k">⚙</span> del título.</div></li>
+    <li><div>Elegí un preset: <span class="k">Compacto</span> (lo esencial para campo), <span class="k">Taller</span> (cortes y extremos) o <span class="k">Completo</span> (todo, con coordenadas).</div></li>
+    <li><div>O marcá y desmarcá cada campo en la lista. Tocá <span class="k">Listo</span> para cerrar.</div></li>
+  </ol>
+  <figure class="narrow"><img src="img/propiedades-campos.png" alt="Panel Configurar campos visibles con los presets Compacto, Taller y Completo y la lista de campos con casillas" loading="lazy" width="260" height="350" style="max-width:300px"></figure>
+</section>
+
+<section class="t" id="t16" data-title="Cambiar el largo de un caño">
+  <div class="thead"><span class="num">16</span><h3>Cambiar el largo de un caño</h3><span class="meta">1 min</span></div>
+  <p class="goal">La corrección más común en obra: el caño medía 234 y en realidad mide 334.</p>
+  <ol class="steps">
+    <li><div>Seleccioná el caño y desplegá Propiedades.</div></li>
+    <li><div>En <strong>Largo Neto del Niple (mm)</strong> escribí la medida real y tocá <span class="k">Aplicar</span>. O usá <span class="k">−100</span> y <span class="k">+100</span>.</div></li>
+    <li><div>Todo lo que sigue aguas abajo se corre lo mismo, con sus accesorios. Lo de aguas arriba no se mueve.</div></li>
+  </ol>
+  <div class="note obra"><b>En obra</b><span>El largo neto es el del niple a cortar, sin los accesorios. Medí entre caras de las piezas, no entre ejes.</span></div>
+</section>
+
+<section class="t" id="t17" data-title="Intercalar una te, válvula o brida en un caño">
+  <div class="thead"><span class="num">17</span><h3>Intercalar una te, válvula o brida en un caño</h3><span class="meta">2 min</span></div>
+  <p class="goal">Para agregar una pieza en medio de un caño que ya existe, sin redibujar la línea.</p>
+  <ol class="steps">
+    <li><div>Seleccioná el caño y desplegá Propiedades. Bajá hasta <strong>Acciones en pieza 3D</strong>.</div></li>
+    <li><div>En <strong>Partir caño a (mm)</strong> poné a qué distancia del inicio del caño va el centro de la pieza. Si lo dejás vacío, va al medio.</div></li>
+    <li><div>Tocá <span class="k">+ Te</span>, <span class="k">+ Válvula</span> o <span class="k">+ Brida</span>. El caño se parte en dos niples, cada uno con su largo, y conservan la descripción y la spec.</div></li>
+  </ol>
+  <figure class="narrow"><img src="img/propiedades-acciones.png" alt="Sección Acciones en pieza 3D con Partir caño a 731 mm y los botones + Te, + Válvula y + Brida" loading="lazy" width="260" height="450" style="max-width:300px"></figure>
+</section>
+
+<section class="t" id="t18" data-title="Girar una te o un codo">
+  <div class="thead"><span class="num">18</span><h3>Girar una te o un codo</h3><span class="meta">1 min</span></div>
+  <p class="goal">Si el ramal o el codo quedó para el lado equivocado, se gira sobre su eje.</p>
+  <ol class="steps">
+    <li><div>Seleccioná la te o el codo y desplegá Propiedades.</div></li>
+    <li><div>En <strong>Girar</strong> tocá <span class="k">+90°</span> o <span class="k">−90°</span>. Para una te también está <span class="k">180°</span> y para un codo <span class="k">+45°</span>.</div></li>
+    <li><div>Lo que estaba conectado a esa pieza gira con ella.</div></li>
+  </ol>
+</section>
+
+<section class="t" id="t19" data-title="Marca, número de línea y extremos del niple">
+  <div class="thead"><span class="num">19</span><h3>Marca, número de línea y extremos del niple</h3><span class="meta">2 min</span></div>
+  <p class="goal">Para que la lista de cortes y el taller hablen el mismo idioma.</p>
+  <ol class="steps">
+    <li><div><strong>Marca:</strong> en Propiedades, campo <strong>Tag / ID Pieza</strong>, escribí la marca del niple (por ejemplo <span class="v">N-01</span>) y confirmá con Enter o tocando afuera.</div></li>
+    <li><div><strong>Línea:</strong> en <strong>Line Number</strong> podés cambiar la línea de esa pieza sola. El campo de la cinta cambia la línea de lo que traces de ahí en adelante.</div></li>
+    <li><div><strong>Extremos:</strong> en <strong>Extremo 1</strong> y <strong>Extremo 2</strong> elegí <span class="k">Plano</span>, <span class="k">Bisel</span> o <span class="k">Roscado</span>. Salen así en la lista de cortes y en los planos.</div></li>
+  </ol>
+  <div class="note tip"><b>Consejo</b><span>La app propone el extremo según la pieza vecina: bisel contra soldadura a tope, plano contra brida slip-on o encastre. Cambialo solo si en obra es distinto.</span></div>
+</section>
+
+<section class="t" id="t20" data-title="Borrar, deshacer y rehacer">
+  <div class="thead"><span class="num">20</span><h3>Borrar, deshacer y rehacer</h3><span class="meta">1 min</span></div>
+  <p class="goal">Todo se puede deshacer.</p>
+  <ol class="steps">
+    <li><div><strong>Borrar una pieza:</strong> seleccionala, desplegá Propiedades y tocá <span class="k">🗑 Borrar Pieza</span>. Queda una boca libre donde estaba.</div></li>
+    <li><div><strong>Deshacer y rehacer:</strong> <span class="k">↩</span> y <span class="k">↪</span> en la cinta. Guarda los últimos 50 pasos del proyecto abierto.</div></li>
+    <li><div><strong>Empezar de cero el modelo:</strong> <span class="k">↺</span> vacía el proyecto abierto. Si fue sin querer, tocá <span class="k">↩</span> enseguida.</div></li>
+  </ol>
+  <div class="note warn"><b>Ojo</b><span>Al abrir otro proyecto o un PCF se borra la lista de deshacer. Lo que hiciste queda guardado, pero ya no se puede deshacer paso a paso.</span></div>
+</section>
+
+<h2 class="block" id="b-plant">Ida y vuelta con Plant 3D</h2>
+
+<section class="t" id="t21" data-title="Abrir un PCF de Plant 3D">
+  <div class="thead"><span class="num">21</span><h3>Abrir un PCF de Plant 3D</h3><span class="meta">2 min</span></div>
+  <p class="goal">El PCF es el archivo con que la línea va y vuelve entre Plant y la app. Cada PCF que abrís crea un proyecto nuevo.</p>
+  <ol class="steps">
+    <li><div><strong>En la oficina:</strong> en Plant 3D 2027 exportá la línea a PCF y mandá el archivo al celular (WhatsApp, mail, Drive).</div></li>
+    <li><div><strong>Desde la app:</strong> tocá <span class="k amber">📂 ABRIR PCF</span> en la cinta, o <span class="k">Proyecto ▾ → Abrir PCF</span>, y elegí el archivo. Podés elegir varios PCF a la vez: se crea un proyecto por cada uno.</div></li>
+    <li><div><strong>Desde WhatsApp o Drive (Android, con la app instalada):</strong> mantené apretado el archivo, tocá <span class="k">Compartir</span> y elegí <span class="k">Plant 3D</span>.</div></li>
+    <li><div>Leé la línea de estado: cuántas piezas y caños tiene, cuántas bocas libres y qué bloques omitió (soldaduras, juntas y espárragos, que Plant vuelve a generar).</div></li>
+  </ol>
+  <div class="note tip"><b>Base de comparación</b><span>El PCF como llegó queda guardado como “base”. Todo lo que cambies se compara contra esa base (guía 28).</span></div>
+  <div class="note warn"><b>Ojo</b><span>Antes de abrir el PCF, elegí la misma spec con que se modeló en Plant (guía 06). Así cada pieza conserva su código y Plant la reconoce de vuelta.</span></div>
+</section>
+
+<section class="t" id="t22" data-title="Exportar el PCF corregido y cargarlo en Plant 3D 2027">
+  <div class="thead"><span class="num">22</span><h3>Exportar el PCF corregido y cargarlo en Plant 3D 2027</h3><span class="meta">4 min</span></div>
+  <p class="goal">La vuelta: el PCF con tus correcciones entra a Plant con el comando PCF to Pipe.</p>
+  <ol class="steps">
+    <li><div>Tocá <span class="k">Iso / DXF</span> en la cinta y bajá hasta <strong>Archivo de Tubería (.PCF)</strong>.</div></li>
+    <li><div>Dejá elegido <span class="k">Volver a Plant 3D</span>. Es el formato que acepta PCF to Pipe: una spec por pieza, sin soldaduras ni juntas, que Plant agrega solo.</div></li>
+    <li><div>Tocá <span class="k">⬇ DESCARGAR ARCHIVO .PCF</span>. <span class="k">Ver Código</span> muestra el texto y <span class="k">Copiar</span> lo copia.</div></li>
+    <li><div>En Plant 3D 2027, con el proyecto y la spec correctos abiertos, ejecutá <span class="v">PCF to Pipe</span> y elegí el archivo.</div></li>
+  </ol>
+  <figure><img src="img/exportar.jpg" alt="Sección Archivo de Tubería PCF con los botones Volver a Plant 3D e Isogen completo, la unidad de diámetro y Descargar archivo PCF, y debajo la sección del plano DXF" loading="lazy" width="800" height="600"></figure>
+  <div class="note tip"><b>Qué cambia en el archivo</b><span>Las piezas que no tocaste salen igual que en el PCF original. Las que moviste cambian solo sus coordenadas. Si el PCF vino de Plant, se respeta su cabecera y su unidad de diámetro.</span></div>
+  <div class="note tip"><b>Atajo</b><span><span class="k">⬇ EXPORTAR PCF</span> en la cinta baja directamente el PCF para Plant, sin abrir la ventana.</span></div>
+  <div class="note warn"><b>Isogen completo</b><span>Usalo solo si el PCF va a Isogen para hacer isométricos: lleva soldaduras, juntas, espárragos, spools y tabla de materiales. Ese formato no es para PCF to Pipe.</span></div>
+</section>
+
+<section class="t" id="t23" data-title="Administrar proyectos y pasarlos a otro equipo">
+  <div class="thead"><span class="num">23</span><h3>Administrar proyectos y pasarlos a otro equipo</h3><span class="meta">2 min</span></div>
+  <p class="goal">Todo vive en el equipo donde trabajaste. Para pasarlo a la PC o a un compañero se usa una copia.</p>
+  <ol class="steps">
+    <li><div>Tocá <span class="k">Proyecto ▾</span>. Cada tarjeta muestra la línea, cuántas piezas y notas tiene, cuándo se cambió y de qué PCF vino.</div></li>
+    <li><div><strong>Abrir:</strong> tocá la tarjeta. <strong>Renombrar:</strong> <span class="k">Renombrar</span>.</div></li>
+    <li><div><strong>Pasar a otro equipo:</strong> <span class="k">Copia .achero</span> baja un archivo con el modelo, la base, las notas y las fotos. En el otro equipo, ábrilo con <span class="k">Abrir PCF o copia (.achero)</span>.</div></li>
+    <li><div><strong>Borrar:</strong> <span class="k">Borrar</span> y después <span class="k">Borrar definitivamente</span>.</div></li>
+  </ol>
+  <div class="note warn"><b>Ojo</b><span>Borrar un proyecto borra también sus notas y fotos, y no se puede deshacer. Si dudás, hacé antes una copia .achero.</span></div>
+</section>
+
+<h2 class="block" id="b-taller">Taller</h2>
+
+<section class="t" id="t24" data-title="Lista de cortes y materiales">
+  <div class="thead"><span class="num">24</span><h3>Lista de cortes y materiales</h3><span class="meta">2 min</span></div>
+  <p class="goal">Para el cañista: qué niples cortar, de qué largo y con qué extremos. Y el cómputo de materiales.</p>
+  <figure><img src="img/cortes.jpg" alt="Ventana Lista de cortes de niples con identificación N-01 a N-12, diámetro, largo en milímetros, extremos y botón Ver en 3D" loading="lazy" width="800" height="600"></figure>
+  <ol class="steps">
+    <li><div>Tocá <span class="k">Lista de Cortes</span> en la cinta.</div></li>
+    <li><div>En <strong>Lista de Cortes de Niples</strong> está cada niple con su marca, diámetro, largo y extremos. Podés cambiar los extremos desde ahí, y <span class="k">Ver en 3D</span> te lleva al niple.</div></li>
+    <li><div>En <strong>Lista de Materiales BOM</strong> está el cómputo de caño, accesorios, juntas y espárragos.</div></li>
+    <li><div><span class="k">Exportar CSV (Excel)</span> baja la planilla. <span class="k">Compartir / Copiar Lista</span> la manda por WhatsApp o la copia como texto.</div></li>
+  </ol>
+</section>
+
+<section class="t" id="t25" data-title="Spools y soldaduras de campo">
+  <div class="thead"><span class="num">25</span><h3>Spools y soldaduras de campo</h3><span class="meta">4 min</span></div>
+  <p class="goal">La app parte la línea en spools como Isogen: cada spool termina en una brida o en una soldadura de campo.</p>
+  <ol class="steps">
+    <li><div>Tocá <span class="k">Spools</span> en la cinta. Cada renglón es un spool con sus cortes, soldaduras, tamaño para transporte y peso aproximado.</div></li>
+    <li><div>Tocá un spool para ver sus cortes de caño, accesorios y soldaduras numeradas (<span class="v">W-01</span>, <span class="v">W-02</span>…).</div></li>
+    <li><div>Para marcar una soldadura como de campo, tocá al lado de ella <span class="k">FW</span> (soldadura de campo) o <span class="k">FFW</span> (de campo con sobrelargo de 100 mm en el caño para ajustar en obra). El spool se parte ahí. <span class="k">Taller</span> la vuelve a taller.</div></li>
+    <li><div>Prendé <strong>Colorear en 3D</strong> para ver cada spool de un color. Lo gris son materiales de montaje.</div></li>
+    <li><div>En <strong>Materiales de montaje</strong> están las válvulas e instrumentos bridados, que no van en ningún spool.</div></li>
+  </ol>
+  <div class="pair">
+    <figure><img src="img/spool-detalle.jpg" alt="Spool SKA-L01-SP04 desplegado con cortes N-05 a N-07, accesorios y soldaduras W-09 a W-13 con botones Taller, FW y FFW" loading="lazy" width="800" height="600"></figure>
+    <figure><img src="img/spools-3d.png" alt="Modelo 3D con cada spool pintado de un color distinto" loading="lazy" width="560" height="300"></figure>
+  </div>
+  <div class="note tip"><b>Compartir</b><span>Cada spool tiene botones para compartir su ficha por WhatsApp y para bajar su plano en PDF. <span class="k">Exportar CSV (Excel)</span> baja todos los spools en una planilla.</span></div>
+</section>
+
+<section class="t" id="t26" data-title="Planos isométricos en PDF">
+  <div class="thead"><span class="num">26</span><h3>Planos isométricos en PDF</h3><span class="meta">3 min</span></div>
+  <p class="goal">Isométrico de la línea y uno por spool, con cotas, globos, soldaduras, lista de materiales, cortes y rótulo.</p>
+  <ol class="steps">
+    <li><div>Tocá <span class="k">Iso / DXF</span>. Arriba está <strong>Planos isométricos (PDF)</strong>.</div></li>
+    <li><div>Completá <strong>Proyecto</strong>, <strong>Dibujó</strong> y <strong>Revisión</strong>, y elegí la hoja <span class="k">A3</span> o <span class="k">A4</span>. Quedan recordados para la próxima.</div></li>
+    <li><div>Marcá qué querés: <strong>Línea completa</strong>, <strong>Un plano por spool</strong>, o los dos.</div></li>
+    <li><div>Revisá cada hoja tocando las pestañas (<span class="k">Línea</span>, <span class="k">SP01</span>, <span class="k">SP02</span>…).</div></li>
+    <li><div><span class="k">⬇ DESCARGAR PDF</span> o <span class="k">Compartir</span>.</div></li>
+  </ol>
+  <figure><img src="img/planos.jpg" alt="Sección Planos isométricos con proyecto, dibujó, revisión, hoja A3 y vista previa de la hoja de línea con tablas" loading="lazy" width="800" height="600"></figure>
+  <div class="note tip"><b>Medidas</b><span>El dibujo no está a escala: los tramos largos se achican para que entre todo. Las cotas sí muestran las medidas reales en milímetros.</span></div>
+</section>
+
+<section class="t" id="t27" data-title="Plano DXF para AutoCAD">
+  <div class="thead"><span class="num">27</span><h3>Plano DXF para AutoCAD</h3><span class="meta">1 min</span></div>
+  <p class="goal">Un plano 2D en milímetros para abrir en AutoCAD.</p>
+  <ol class="steps">
+    <li><div>En <span class="k">Iso / DXF</span>, bajá hasta <strong>Plano CAD 2D con Cotas y Tablas (.DXF)</strong>.</div></li>
+    <li><div>Elegí la vista: <span class="k">Isométrico 2D</span>, <span class="k">Lámina Completa</span>, <span class="k">Planta (XY)</span>, <span class="k">Alzado (XZ)</span> o <span class="k">Perfil (YZ)</span>.</div></li>
+    <li><div>Tocá <span class="k">⬇ DESCARGAR PLANO .DXF</span>.</div></li>
+  </ol>
+</section>
+
+<h2 class="block" id="b-obra">En obra</h2>
+
+<section class="t" id="t28" data-title="Ver qué cambió respecto de Plant">
+  <div class="thead"><span class="num">28</span><h3>Ver qué cambió respecto de Plant</h3><span class="meta">2 min</span></div>
+  <p class="goal">La lista de todo lo que corregiste, para que la oficina técnica sepa qué revisar.</p>
+  <ol class="steps">
+    <li><div>Tocá <span class="k amber">Campo</span> en la cinta. La pestaña <strong>Cambios</strong> lista cada pieza agregada, borrada, movida o editada, y cada soldadura marcada de campo.</div></li>
+    <li><div>Las piezas que solo se corrieron porque alargaste un caño van juntas en un renglón (“41 piezas arrastradas”).</div></li>
+    <li><div>Tocá un cambio para ir a esa pieza en 3D.</div></li>
+    <li><div>Prendé <strong>Colorear en 3D</strong>: agregadas en verde, movidas en amarillo, editadas en celeste, soldaduras en naranja y lo que no cambió en gris.</div></li>
+  </ol>
+  <div class="pair">
+    <figure><img src="img/campo-cambios.jpg" alt="Ventana Campo, pestaña Cambios: caño con largo 234 a 334 mm y 41 piezas arrastradas corridas 100 mm al Este" loading="lazy" width="800" height="600"></figure>
+    <figure><img src="img/campo-3d.jpg" alt="Modelo 3D con las piezas movidas pintadas de amarillo" loading="lazy" width="800" height="600"></figure>
+  </div>
+</section>
+
+<section class="t" id="t29" data-title="Notas con fotos">
+  <div class="thead"><span class="num">29</span><h3>Notas con fotos</h3><span class="meta">2 min</span></div>
+  <p class="goal">Lo que no entra en el modelo (una interferencia, un soporte, una duda) va en una nota con foto.</p>
+  <ol class="steps">
+    <li><div>Si la nota es de una pieza, primero tocala en 3D para seleccionarla.</div></li>
+    <li><div>Tocá <span class="k amber">Campo</span> y la pestaña <strong>Notas</strong>. Arriba dice a qué pieza se asocia, o “Nota general”.</div></li>
+    <li><div>Escribí la nota. Tocá <span class="k">📷 Sacar foto</span> para usar la cámara o <span class="k">🖼 Galería</span> para elegir fotos que ya tenías. Podés agregar varias.</div></li>
+    <li><div>Tocá <span class="k">Guardar nota</span>. Las fotos se achican para no llenar el celular.</div></li>
+    <li><div>Tocá la pieza en la nota para ir a ella en 3D, o una foto para verla grande.</div></li>
+  </ol>
+  <figure><img src="img/campo-notas.jpg" alt="Pestaña Notas con el cuadro para escribir, los botones Sacar foto, Galería y Guardar nota, y una nota guardada con foto sobre una válvula" loading="lazy" width="800" height="600"></figure>
+</section>
+
+<section class="t" id="t30" data-title="Informe de campo y nueva base">
+  <div class="thead"><span class="num">30</span><h3>Informe de campo y nueva base</h3><span class="meta">3 min</span></div>
+  <p class="goal">Un PDF para mandar a la oficina junto con el PCF corregido.</p>
+  <ol class="steps">
+    <li><div>En <span class="k amber">Campo</span>, pestaña <strong>Informe PDF</strong>, escribí tu nombre en <strong>Relevó</strong>.</div></li>
+    <li><div>Dejá marcado <strong>Agregar el isométrico de la línea como quedó</strong> si querés que el plano vaya al final.</div></li>
+    <li><div>Tocá <span class="k">⬇ DESCARGAR INFORME</span> o <span class="k">Compartir</span>. El informe trae el resumen, la tabla de cambios y cada nota con sus fotos.</div></li>
+    <li><div>Mandá el informe y el PCF (guía 22) a la oficina.</div></li>
+    <li><div>Cuando la oficina ya cargó el PCF en Plant, volvé a la pestaña <strong>Cambios</strong> y tocá <span class="k">Tomar el modelo actual como nueva base</span>. La lista vuelve a cero y lo próximo que cambies se mide desde ahí.</div></li>
+  </ol>
+  <figure class="mid"><img src="img/campo-informe.jpg" alt="Pestaña Informe PDF con el campo Relevó, la casilla del isométrico y los botones Descargar informe y Compartir" loading="lazy" width="800" height="600"></figure>
+  <div class="note warn"><b>Ojo</b><span>No tomes una base nueva antes de mandar el informe: se pierde la lista de cambios. Las notas no se borran.</span></div>
+</section>
+
+<section class="t" id="t31" data-title="Trabajar sin señal y actualizar la app">
+  <div class="thead"><span class="num">31</span><h3>Trabajar sin señal y actualizar la app</h3><span class="meta">1 min</span></div>
+  <p class="goal">En obra no hace falta conexión.</p>
+  <ul class="plain">
+    <li>Sin señal aparece abajo “Sin conexión · los cambios se guardan en este equipo”. Todo funciona: trazar, corregir, spools, planos, notas, fotos y el informe.</li>
+    <li>Lo que necesita señal es mandar los archivos (WhatsApp, mail). Bajalos igual y mandalos cuando vuelvas a tener conexión.</li>
+    <li>Cuando hay una versión nueva, aparece el aviso “Hay una versión nueva de la app”. Tocá <span class="k">Actualizar</span>: tus proyectos no se tocan.</li>
+  </ul>
+  <div class="note obra"><b>En obra</b><span>Si vas a cambiar de celular, antes hacé una copia .achero de cada proyecto (guía 23). Los proyectos viven en el equipo, no en internet.</span></div>
+</section>
+
+<h2 class="block" id="b-ref">Referencia</h2>
+
+<section class="t" id="glosario" data-title="Glosario">
+  <div class="thead"><span class="num">A</span><h3>Glosario</h3></div>
+  <dl class="gl">
+    <dt>Boca libre</dt><dd>Extremo de una pieza que no está conectado a nada. Es desde donde se sigue trazando.</dd>
+    <dt>Boca activa</dt><dd>La boca libre desde la que sale lo próximo que insertes o traces.</dd>
+    <dt>Spec</dt><dd>Especificación de Plant 3D: la lista de piezas permitidas para una clase de cañería (archivos .pspc y .pspx).</dd>
+    <dt>PCF</dt><dd>Archivo de texto con la línea pieza por pieza. Es el formato de ida y vuelta entre Plant 3D y la app.</dd>
+    <dt>PCF to Pipe</dt><dd>Comando de Plant 3D que convierte un PCF en cañería del modelo.</dd>
+    <dt>Eje a eje</dt><dd>Medida entre los ejes de las piezas, al vértice de los codos. Así se traza.</dd>
+    <dt>Largo neto</dt><dd>Largo del niple a cortar, descontando lo que ocupan los accesorios.</dd>
+    <dt>Take-off</dt><dd>Distancia del centro de un accesorio a su boca. Es lo que se descuenta del caño.</dd>
+    <dt>BOP</dt><dd>Bottom of pipe: altura del fondo del caño.</dd>
+    <dt>Spool</dt><dd>Tramo que se arma en taller y viaja entero a la obra.</dd>
+    <dt>FW / FFW</dt><dd>Soldadura de campo / soldadura de campo con sobrelargo para ajustar en obra.</dd>
+    <dt>Base</dt><dd>El modelo tal como llegó de Plant. Los cambios de campo se miden contra la base.</dd>
+    <dt>.achero</dt><dd>Copia de un proyecto con modelo, base, notas y fotos, para pasarlo a otro equipo.</dd>
+  </dl>
+</section>
+
+<section class="t" id="problemas" data-title="Problemas frecuentes">
+  <div class="thead"><span class="num">B</span><h3>Problemas frecuentes</h3></div>
+  <div class="tbl"><table>
+    <tr><th>Pasa esto</th><th>Hacé esto</th></tr>
+    <tr><td>No veo el modelo</td><td>Tocá <span class="k">EXT</span>.</td></tr>
+    <tr><td>Desapareció una paleta</td><td>Activala en la fila de arriba o tocá <span class="k">⊞ Reset Vista</span>.</td></tr>
+    <tr><td>TRAZAR no hace nada</td><td>Leé la línea de estado. Suele ser una dirección opuesta (180°), un largo menor al niple mínimo o una pieza que la spec no tiene en ese diámetro.</td></tr>
+    <tr><td>Sale desde un lugar que no quería</td><td>La boca activa era otra. Tocá la boca correcta en 3D o usá <span class="k">⇄ Cambiar Boca/Ramal</span>.</td></tr>
+    <tr><td>“La spec no tiene esta pieza”</td><td>Cambiá de diámetro o de spec, o elegí otra familia en el Catálogo.</td></tr>
+    <tr><td>Plant rechaza el PCF</td><td>Exportá con <span class="k">Volver a Plant 3D</span>, no Isogen, y revisá que la spec de Plant sea la misma de la app.</td></tr>
+    <tr><td>No aparece “Instalar la app”</td><td>La app tiene que abrirse desde su dirección segura (https). Pedísela a la oficina técnica.</td></tr>
+    <tr><td>Abrí el proyecto equivocado</td><td><span class="k">Proyecto ▾</span> y elegí el correcto: nada se pierde al cambiar.</td></tr>
+  </table></div>
+</section>
+
+<footer>Ayuda de Achero Plant 3D para la versión con proyectos de campo (noviembre de 2026). Las capturas son de un proyecto de ejemplo.</footer>
+</main>
+</div>
+
+<dialog id="zoom" aria-label="Imagen ampliada"><button type="button" id="zclose">Cerrar ✕</button><img id="zimg" alt=""></dialog>
+
+<script>
+(function () {
+  var main = document.getElementById('main');
+  var toc = document.getElementById('toc');
+  var sections = Array.prototype.slice.call(document.querySelectorAll('section.t'));
+  var blocks = Array.prototype.slice.call(document.querySelectorAll('h2.block'));
+
+  // Índice armado desde los títulos de la página
+  var html = '<div class="toc-head"><span>Índice</span><button type="button" id="tocclose">Cerrar</button></div>';
+  Array.prototype.forEach.call(main.children, function (el) {
+    if (el.matches('h2.block')) html += '<h2>' + el.textContent + '</h2>';
+    if (el.matches('section.t')) html += '<a href="#' + el.id + '" data-for="' + el.id + '">' + el.getAttribute('data-title') + '</a>';
+  });
+  toc.innerHTML = html;
+
+  // Panel lateral en el celular
+  var btn = document.getElementById('tocbtn');
+  var scrim = document.getElementById('scrim');
+  var small = window.matchMedia('(max-width: 900px)');
+  function setOpen(open) {
+    toc.classList.toggle('open', open);
+    scrim.classList.toggle('open', open);
+    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    if (open) { var on = toc.querySelector('a.on'); if (on) on.scrollIntoView({ block: 'center' }); }
+  }
+  btn.addEventListener('click', function () { setOpen(!toc.classList.contains('open')); });
+  scrim.addEventListener('click', function () { setOpen(false); });
+  document.getElementById('tocclose').addEventListener('click', function () { setOpen(false); });
+  toc.addEventListener('click', function (e) { if (e.target.closest('a') && small.matches) setOpen(false); });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') setOpen(false); });
+
+  // Guía visible marcada en el índice
+  if ('IntersectionObserver' in window) {
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (en) {
+        if (!en.isIntersecting) return;
+        toc.querySelectorAll('a.on').forEach(function (a) { a.classList.remove('on'); });
+        var a = toc.querySelector('[data-for="' + en.target.id + '"]');
+        if (a) a.classList.add('on');
+      });
+    }, { rootMargin: '-20% 0px -70% 0px' });
+    sections.forEach(function (s) { io.observe(s); });
+  }
+
+  // Búsqueda (los dos buscadores hacen lo mismo)
+  var norm = function (s) { return s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, ''); };
+  var texts = sections.map(function (s) { return norm(s.textContent); });
+  var inputs = [document.getElementById('q'), document.getElementById('q2')];
+  var empty = document.getElementById('empty');
+  function search(value, from) {
+    inputs.forEach(function (i) { if (i !== from) i.value = value; });
+    var words = norm(value.trim()).split(/\s+/).filter(Boolean);
+    var shown = 0;
+    sections.forEach(function (s, i) {
+      var hit = words.every(function (w) { return texts[i].indexOf(w) >= 0; });
+      s.classList.toggle('hide', !hit);
+      var link = toc.querySelector('[data-for="' + s.id + '"]');
+      if (link) link.classList.toggle('hide', !hit);
+      if (hit) shown++;
+    });
+    blocks.forEach(function (b) {
+      var n = b.nextElementSibling, any = false;
+      while (n && !n.matches('h2.block')) { if (n.matches('section.t') && !n.classList.contains('hide')) any = true; n = n.nextElementSibling; }
+      b.hidden = !any;
+    });
+    document.querySelector('.cats').hidden = words.length > 0;
+    empty.style.display = shown ? 'none' : 'block';
+  }
+  inputs.forEach(function (i) { i.addEventListener('input', function () { search(i.value, i); }); });
+  document.querySelectorAll('[data-q]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      search(b.getAttribute('data-q'), null);
+      var first = document.querySelector('section.t:not(.hide)');
+      if (first) first.scrollIntoView();
+    });
+  });
+
+  // Capturas ampliadas
+  var dlg = document.getElementById('zoom');
+  var zimg = document.getElementById('zimg');
+  document.addEventListener('click', function (e) {
+    var img = e.target.closest('figure img');
+    if (!img || typeof dlg.showModal !== 'function') return;
+    zimg.src = img.src; zimg.alt = img.alt; dlg.showModal();
+  });
+  document.getElementById('zclose').addEventListener('click', function () { dlg.close(); });
+  dlg.addEventListener('click', function (e) { if (e.target === dlg) dlg.close(); });
+})();
+</script>
