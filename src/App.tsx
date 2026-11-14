@@ -14,7 +14,7 @@ import { PropertiesInspector } from './ui/PropertiesInspector';
 import { ProjectsModal } from './ui/ProjectsModal';
 import { FieldModal } from './ui/FieldModal';
 import { PwaBanner } from './ui/PwaBanner';
-import { MobileBar } from './ui/MobileBar';
+import { ContextDock } from './ui/ContextDock';
 import { PieceMenu } from './ui/PieceMenu';
 import { MultiSelectBar } from './ui/MultiSelectBar';
 import { ModelCheck } from './ui/ModelCheck';
@@ -76,7 +76,7 @@ export default function App() {
       <TouchNumpad />
 
       {/* Teléfono: barra de pestañas que abre un panel a la vez */}
-      <MobileBar />
+      <ContextDock />
 
       {/* Edición con gestos: menú de la pieza apretada y barra de selección múltiple */}
       <PieceMenu />

@@ -21,7 +21,7 @@ const TOUCH: HelpGroup[] = [
   {
     title: 'Trazar',
     rows: [
-      ['Tocar una boca libre', 'La línea sigue desde ahí y aparece el compás.'],
+      ['Tocar una boca libre', 'La línea sigue desde ahí, aparece el compás y la barra de abajo pasa a trazar.'],
       ['Tocar el fondo', 'Suelta la pieza y la boca: el compás se apaga hasta que elijas otra boca.'],
       ['Flechas sobre la boca o fila X Y Z', 'Eligen hacia dónde va el caño. Si cambia de rumbo, el codo se pone solo.'],
       ['Arrastrar la manija del caño fantasma', 'Da el largo con el dedo. También se puede escribir y tocar Trazar.'],
@@ -33,7 +33,7 @@ const TOUCH: HelpGroup[] = [
   {
     title: 'Piezas',
     rows: [
-      ['Tocar un botón de Piezas', 'Pone en la boca activa la pieza que la spec tiene en ese diámetro.'],
+      ['Poner pieza (en la barra de abajo)', 'Con una boca elegida, muestra lo que la spec tiene en ese diámetro y lo pone en la boca.'],
       ['Mantener apretado un botón con flecha', 'Abre las variantes de la spec: otra familia, otra medida, plano abajo o arriba.'],
       ['Válvula bridada y brida ciega', 'Entran con sus bridas y juntas.']
     ]
@@ -41,7 +41,8 @@ const TOUCH: HelpGroup[] = [
   {
     title: 'Corregir',
     rows: [
-      ['Tocar una pieza', 'La elige. Sus datos están en Propiedades.'],
+      ['Tocar una pieza', 'La elige y la barra de abajo muestra lo que se le puede hacer: largo, partir, derivar, purga, soporte, diámetro, datos y borrar.'],
+      ['Seguir (en la barra de la pieza)', 'Si la pieza tiene una boca libre, vuelve a trazar desde ahí.'],
       ['Mantener apretada una pieza', 'Abre su menú: partir, derivar, girar o dar vuelta, soporte, sustituir, nota de campo, aislar, borrar.'],
       ['Dar vuelta o girar (en el menú)', 'Da vuelta una brida o el sentido de una válvula, pasa una reducción excéntrica de plano abajo a plano arriba y gira el volante.'],
       ['Purga o venteo (en Derivación)', 'Arma de un toque la derivación con su niple, válvula y tapa: la purga hacia abajo, el venteo hacia arriba.'],
@@ -49,6 +50,13 @@ const TOUCH: HelpGroup[] = [
       ['Arrastrar la punta de un caño', 'Lo alarga o lo acorta.'],
       ['Seleccionar varias (en el menú)', 'Para mover, copiar o borrar un grupo de piezas.'],
       ['Flechas de arriba', 'Deshacer y rehacer.']
+    ]
+  },
+  {
+    title: 'Arriba',
+    rows: [
+      ['Archivo', 'Proyectos, spec y número de línea; abrir y exportar el PCF, informe de campo, planos, spools y cortes y materiales.'],
+      ['Vistas (el cubo)', 'Encuadrar, medir, caja de corte, aislar una línea, cotas y el plano DXF de fondo.']
     ]
   },
   {

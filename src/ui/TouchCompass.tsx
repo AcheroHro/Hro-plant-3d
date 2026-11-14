@@ -1,6 +1,6 @@
 import React from 'react';
 import * as THREE from 'three';
-import { Box, Map as MapIcon, Maximize, Ruler, Tags } from 'lucide-react';
+import { IconCajaCorte, IconCotas, IconEncuadrar, IconMedir, IconPlanoDxf } from './icons/ActionIcons';
 import { useUiConfigStore } from '../store/useUiConfigStore';
 import { useReferenceStore } from '../store/useReferenceStore';
 import { usePipingStore, lineOf } from '../store/usePipingStore';
@@ -78,7 +78,7 @@ export const TouchCompass: React.FC = () => {
       <div className="w-full space-y-1.5 mb-1.5 pb-1.5 border-b border-[#2e3440]">
         <div className="flex gap-1 w-full">
           <button type="button" className={toggle(false)} onClick={() => store().frameAll()} title="Encuadrar todo el modelo">
-            <Maximize size={14} />
+            <IconEncuadrar size={18} />
             Encuadrar
           </button>
           <button
@@ -88,7 +88,7 @@ export const TouchCompass: React.FC = () => {
             onClick={() => store().toggleMeasure()}
             title="Medir entre dos puntos tocando el modelo"
           >
-            <Ruler size={14} />
+            <IconMedir size={18} />
             Medir
           </button>
           <button
@@ -98,7 +98,7 @@ export const TouchCompass: React.FC = () => {
             onClick={() => (sectionBox ? store().clearSection() : store().setSectionAround(1000))}
             title="Caja de corte: dibuja solo lo que está cerca de la pieza elegida"
           >
-            <Box size={14} />
+            <IconCajaCorte size={18} />
             Corte
           </button>
         </div>
@@ -111,7 +111,7 @@ export const TouchCompass: React.FC = () => {
             onClick={() => useUiConfigStore.getState().toggleLabels()}
             title="Cotas de los caños, elevaciones y número de línea sobre el modelo"
           >
-            <Tags size={14} />
+            <IconCotas size={18} />
             Etiquetas
           </button>
           <button
@@ -121,7 +121,7 @@ export const TouchCompass: React.FC = () => {
             onClick={() => (reference ? useReferenceStore.getState().setVisible(!reference.visible) : fileRef.current?.click())}
             title="Referencia de obra: un DXF de ejes y columnas dibujado de fondo"
           >
-            <MapIcon size={14} />
+            <IconPlanoDxf size={18} />
             {reference ? 'Referencia' : 'Ref. DXF'}
           </button>
         </div>

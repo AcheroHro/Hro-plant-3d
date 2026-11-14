@@ -61,7 +61,12 @@ canvas {
   padding-bottom: env(safe-area-inset-bottom);
 }
 .mobile-sheet-bottom {
-  bottom: calc(3.5rem + env(safe-area-inset-bottom));
+  bottom: 0;
+  padding-bottom: env(safe-area-inset-bottom);
+}
+/* Barra de abajo del teléfono (cambia según lo elegido) */
+.dock-safe {
+  padding-bottom: env(safe-area-inset-bottom);
 }
 .mobile-sheet-top {
   top: var(--mobile-top);

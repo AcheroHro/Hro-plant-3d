@@ -53,6 +53,8 @@ export interface PieceMenuState {
   componentId: string;
   /** En caños: distancia del punto tocado al inicio del caño (mm) */
   offsetMm?: number;
+  /** Abrir ya desplegada una opción (desde la barra de abajo del teléfono) */
+  section?: 'branch' | 'support' | 'size';
 }
 
 export interface PipingState {

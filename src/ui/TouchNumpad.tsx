@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import * as THREE from 'three';
-import { ArrowUpDown, Check, ChevronLeft, ChevronRight, CornerUpRight, Keyboard, Link2, MapPin, Repeat, Spline, Target, TrendingDown, X } from 'lucide-react';
+import { ArrowUpDown, Check, ChevronLeft, ChevronRight, CornerUpRight, Keyboard, Spline, TrendingDown, X } from 'lucide-react';
+import { IconAlinear, IconIrAPunto, IconOtraBoca, IconUnirBoca } from './icons/ActionIcons';
 import { planOffset } from '../core/routing/routeMath';
 import { usePipingStore } from '../store/usePipingStore';
 import { FloatingPalette } from './FloatingPalette';
@@ -21,7 +22,11 @@ const AXES: { label: string; v: [number, number, number]; cls: string }[] = [
   { label: '−Z', v: [0, 0, -1], cls: 'text-sky-400' }
 ];
 
-export const TouchNumpad: React.FC = () => {
+/**
+ * Trazar: dirección, largo y ayudas de trazado. En escritorio es una paleta flotante; en el
+ * teléfono vive dentro de la barra de abajo cuando hay una boca activa (`embedded`).
+ */
+export const TouchNumpad: React.FC<{ embedded?: boolean }> = ({ embedded = false }) => {
   const [showTouchKeys, setShowTouchKeys] = useState(false);
   const [tool, setTool] = useState<Tool | null>(null);
   const [slopeDown, setSlopeDown] = useState(true);
@@ -241,7 +246,7 @@ export const TouchNumpad: React.FC = () => {
         }`}
         title="Unir la boca activa con otra boca libre: la app propone los recorridos"
       >
-        <Link2 size={14} />
+        <IconUnirBoca size={16} />
         <span>{connectPicking ? 'Tocá la boca destino' : 'Conectar a boca'}</span>
       </button>
       <button
@@ -254,7 +259,7 @@ export const TouchNumpad: React.FC = () => {
         title="Largo hasta alinear: tocá otra boca o pieza y el largo del tramo se calcula solo"
         aria-pressed={alignPicking}
       >
-        <Target size={14} />
+        <IconAlinear size={16} />
         <span>{alignPicking ? 'Tocá la referencia' : 'Alinear'}</span>
       </button>
       <button
@@ -266,7 +271,7 @@ export const TouchNumpad: React.FC = () => {
         className={`${chip} bg-[#222630] text-emerald-300 border-emerald-500/40`}
         title="Saltar a la siguiente boca o ramal libre"
       >
-        <Repeat size={14} />
+        <IconOtraBoca size={16} />
         <span>Otra boca</span>
       </button>
       <button
@@ -334,7 +339,7 @@ export const TouchNumpad: React.FC = () => {
       {toolChip('slope', <TrendingDown size={14} />, slopePct === 0 ? 'Pend.' : `${slopePct > 0 ? '+' : '−'}${Math.abs(slopePct)}%`, slopePct !== 0)}
       {toolChip('offset', <Spline size={14} />, 'Desvío', false)}
       {toolChip('elev', <ArrowUpDown size={14} />, 'Elev.', false)}
-      {toolChip('coord', <MapPin size={14} />, 'Boca', false)}
+      {toolChip('coord', <IconIrAPunto size={16} />, 'Boca', false)}
     </div>
   );
 
@@ -573,19 +578,8 @@ export const TouchNumpad: React.FC = () => {
     </button>
   );
 
-  return (
-    <FloatingPalette
-      paletteId="numpad"
-      title="Trazar"
-      icon={phone ? undefined : '⌨'}
-      badge={
-        <span className="px-1.5 py-0.5 rounded bg-sky-500/20 border border-sky-500/40 text-sky-300 font-mono font-bold text-[9px]">
-          [{activeDirection.x.toFixed(0)},{activeDirection.y.toFixed(0)},{activeDirection.z.toFixed(0)}] • {nominalDiameter}&quot;
-        </span>
-      }
-      bodyClassName="p-2.5 flex flex-col items-center gap-1.5 w-[92vw] max-w-[540px]"
-      sheetBodyClassName="p-2 flex flex-col items-center gap-2 w-full"
-    >
+  const body = (
+    <>
       {needsPort && pickPortNotice}
       {axisRow}
       {connectChooser || lengthBar}
@@ -627,6 +621,27 @@ export const TouchNumpad: React.FC = () => {
           </button>
         </div>
       )}
+    </>
+  );
+
+  if (embedded) return <div className="flex flex-col items-center gap-2 w-full">{body}</div>;
+  // En el teléfono Trazar está en la barra de abajo (ContextDock)
+  if (phone) return null;
+
+  return (
+    <FloatingPalette
+      paletteId="numpad"
+      title="Trazar"
+      icon={phone ? undefined : '⌨'}
+      badge={
+        <span className="px-1.5 py-0.5 rounded bg-sky-500/20 border border-sky-500/40 text-sky-300 font-mono font-bold text-[9px]">
+          [{activeDirection.x.toFixed(0)},{activeDirection.y.toFixed(0)},{activeDirection.z.toFixed(0)}] • {nominalDiameter}&quot;
+        </span>
+      }
+      bodyClassName="p-2.5 flex flex-col items-center gap-1.5 w-[92vw] max-w-[540px]"
+      sheetBodyClassName="p-2 flex flex-col items-center gap-2 w-full"
+    >
+      {body}
     </FloatingPalette>
   );
 };

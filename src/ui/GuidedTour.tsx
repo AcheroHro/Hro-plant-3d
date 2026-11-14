@@ -1,6 +1,17 @@
 import React, { useEffect, useState } from 'react';
 import { MobilePanel, tourAlreadySeen, useUiConfigStore } from '../store/useUiConfigStore';
 import { getPhoneLayout, usePhoneLayout, vibrate } from './useIsPhone';
+import { usePipingStore } from '../store/usePipingStore';
+
+/** Suelta la pieza elegida y deja activa una boca libre (la que estaba, o la última) */
+function showOpenPort(): void {
+  const store = usePipingStore.getState();
+  if (store.selectedComponentId) store.setSelectedComponentId(null);
+  const current = store.selectedPortId ? store.graph.ports.get(store.selectedPortId) : undefined;
+  if (current && !current.connectedJointId) return;
+  const open = store.graph.getOpenPorts();
+  if (open.length) store.setSelectedPortId(open[open.length - 1].id);
+}
 
 interface TourStep {
   title: string;
@@ -20,15 +31,15 @@ const STEPS: TourStep[] = [
     panel: null
   },
   {
-    title: 'Proyecto, spec y diámetro',
-    text: 'Arriba elegís el proyecto, la spec y el diámetro con el que vas a trazar. Las flechas deshacen y rehacen.',
+    title: 'Archivo y Vistas',
+    text: 'Arriba, Archivo tiene el proyecto, la spec, abrir y exportar el PCF, los planos y las notas de campo. Al lado: deshacer, rehacer y Vistas.',
     target: 'top',
     panel: null,
     phoneOnly: true
   },
   {
     title: 'Hacia dónde va el caño',
-    text: 'En Trazar, tocá un eje. También podés tocar las flechas que aparecen sobre la boca activa, en el modelo.',
+    text: 'Con una boca elegida, la barra de abajo es para trazar: tocá un eje, o las flechas que aparecen sobre la boca en el modelo.',
     target: 'axes',
     panel: 'trazar'
   },
@@ -51,20 +62,21 @@ const STEPS: TourStep[] = [
     panel: 'trazar'
   },
   {
-    title: 'Piezas',
-    text: 'Codos, tes, válvulas, bridas y reducciones: se ponen en la boca activa.',
-    target: 'tab-piezas',
+    title: 'Poner una pieza',
+    text: 'Poner pieza, en la barra de abajo, muestra los codos, tes, válvulas, bridas y reducciones que la spec tiene en ese diámetro. Van en la boca activa.',
+    target: 'dock-piezas',
     panel: null,
     phoneOnly: true
   },
   {
     title: 'Tocar el modelo',
-    text: 'Un toque elige una pieza o una boca. Mantené apretada una pieza y se abre su menú: partir, derivar, dar vuelta, purga o venteo, cambiar el diámetro del tramo, soporte, nota de campo, borrar. Doble toque la encuadra.',
+    text: 'Un toque elige una pieza o una boca, y la barra de abajo cambia: con un caño, su largo, partir, derivar, purga, soporte, diámetro y borrar. Mantené apretada una pieza para ver todas sus opciones. Doble toque la encuadra.',
+    target: 'dock',
     panel: null
   },
   {
     title: 'Vistas',
-    text: 'Tocá una cara del cubo para ver de frente, de costado o en planta. En Vistas también están medir, aislar una línea, la caja de corte, las etiquetas con cotas y elevaciones (tocás una cota y cambiás el largo) y la referencia de obra desde un DXF.',
+    text: 'Tocá una cara del cubo para ver de frente, de costado o en planta. En Vistas, arriba a la derecha, están medir, aislar una línea, la caja de corte, las cotas y elevaciones (tocás una cota y cambiás el largo) y el plano DXF de fondo.',
     target: 'cube',
     panel: null
   },
@@ -76,8 +88,8 @@ const STEPS: TourStep[] = [
   },
   {
     title: 'Devolver el trabajo',
-    text: 'En Más están abrir y exportar el PCF, los spools, la lista de cortes, los planos y las notas de campo.',
-    target: 'tab-mas',
+    text: 'En Archivo, Entregar tiene exportar el PCF, el informe de campo, los planos, los spools y los cortes y materiales.',
+    target: 'archivo',
     panel: null,
     phoneOnly: true
   }
@@ -120,6 +132,8 @@ export const GuidedTour: React.FC = () => {
       return;
     }
     if (getPhoneLayout() && step.panel !== undefined) useUiConfigStore.getState().setMobilePanel(step.panel, false);
+    // En el teléfono, trazar y poner piezas viven en la barra de abajo con una boca activa
+    if (getPhoneLayout() && (step.panel === 'trazar' || step.target === 'dock-piezas')) showOpenPort();
     const measure = () => {
       const el = step.target ? document.querySelector<HTMLElement>(`[data-tour="${step.target}"]`) : null;
       const r = el?.getBoundingClientRect();

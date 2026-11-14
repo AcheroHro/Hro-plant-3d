@@ -1,6 +1,7 @@
 import React, { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
-import { Anchor, ArrowLeftRight, ClipboardList, Diameter, Eye, CopyPlus, GitBranch, MessageSquarePlus, Replace, RotateCw, Scissors, Trash2, Waypoints } from 'lucide-react';
+import { CopyPlus, MessageSquarePlus, Replace, Waypoints } from 'lucide-react';
+import { IconAislarLinea, IconBorrar, IconDarVuelta, IconDatos, IconDerivar, IconDiametroTramo, IconGirarEje, IconPartir, IconSoporte } from './icons/ActionIcons';
 import type { SupportKind } from '../types/piping';
 import { usePipingStore } from '../store/usePipingStore';
 import { sameSizeRun } from '../core/graph/resizeRun';
@@ -52,7 +53,7 @@ export const PieceMenu: React.FC = () => {
   // El menú se abre junto al dedo, sin salirse de la pantalla
   useLayoutEffect(() => {
     setShowSubstitute(false);
-    setSection(null);
+    setSection(menu?.section ?? null);
     setBranchNd(null);
     setRunNd(null);
     if (!menu || !boxRef.current) return setPos(null);
@@ -149,27 +150,27 @@ export const PieceMenu: React.FC = () => {
         </div>
 
         <button type="button" role="menuitem" className={item} onClick={run(openProperties)}>
-          <ClipboardList size={18} className="text-slate-300 shrink-0" />
+          <IconDatos size={20} className="text-slate-300 shrink-0" />
           Propiedades
         </button>
 
         {(comp.type === 'ELBOW' || comp.type === 'TEE') && (
           <button type="button" role="menuitem" className={item} onClick={run(() => store().rotateSelectedComponent(90))}>
-            <RotateCw size={18} className="text-amber-300 shrink-0" />
+            <IconGirarEje size={20} className="text-amber-300 shrink-0" />
             Girar 90°
           </button>
         )}
 
         {comp.type === 'VALVE' && comp.parameters.visual?.actuator !== 'none' && (
           <button type="button" role="menuitem" className={item} onClick={run(() => store().rotateSelectedComponent(90))}>
-            <RotateCw size={18} className="text-amber-300 shrink-0" />
+            <IconGirarEje size={20} className="text-amber-300 shrink-0" />
             Girar el volante 90°
           </button>
         )}
 
         {flipKind && (
           <button type="button" role="menuitem" className={item} onClick={run(() => store().flipSelectedComponent())}>
-            <ArrowLeftRight size={18} className="text-amber-300 shrink-0" />
+            <IconDarVuelta size={20} className="text-amber-300 shrink-0" />
             {flipKind === 'flange'
               ? 'Dar vuelta la brida'
               : flipKind === 'valve'
@@ -181,7 +182,7 @@ export const PieceMenu: React.FC = () => {
         {comp.type === 'PIPE' && offset !== undefined && (
           <div className="px-3 py-2 border-y border-[#2b313d]">
             <div className="flex items-center gap-2 text-xs text-slate-300 mb-1.5">
-              <Scissors size={16} className="text-emerald-300" />
+              <IconPartir size={18} className="text-emerald-300" />
               Partir a {offset} mm del inicio con
             </div>
             <div className="grid grid-cols-3 gap-1.5">
@@ -202,7 +203,7 @@ export const PieceMenu: React.FC = () => {
         {isPipe && branchSizes.length > 0 && (
           <>
             <button type="button" role="menuitem" aria-expanded={section === 'branch'} className={item} onClick={toggleSection('branch')}>
-              <GitBranch size={18} className="text-emerald-300 shrink-0" />
+              <IconDerivar size={20} className="text-emerald-300 shrink-0" />
               <span className="flex-1">Derivación (olet o injerto)</span>
               <span className="text-slate-500">{section === 'branch' ? '▴' : '▾'}</span>
             </button>
@@ -253,7 +254,7 @@ export const PieceMenu: React.FC = () => {
             )}
 
             <button type="button" role="menuitem" aria-expanded={section === 'support'} className={item} onClick={toggleSection('support')}>
-              <Anchor size={18} className="text-yellow-300 shrink-0" />
+              <IconSoporte size={20} className="text-yellow-300 shrink-0" />
               <span className="flex-1">Soporte</span>
               <span className="text-slate-500">{section === 'support' ? '▴' : '▾'}</span>
             </button>
@@ -322,7 +323,7 @@ export const PieceMenu: React.FC = () => {
         {specReader && comp.type !== 'CROSS' && comp.type !== 'INSTRUMENT' && (
           <>
             <button type="button" role="menuitem" aria-expanded={section === 'size'} className={item} onClick={toggleSection('size')}>
-              <Diameter size={18} className="text-sky-300 shrink-0" />
+              <IconDiametroTramo size={20} className="text-sky-300 shrink-0" />
               <span className="flex-1">Cambiar diámetro del tramo</span>
               <span className="text-slate-500">{section === 'size' ? '▴' : '▾'}</span>
             </button>
@@ -385,12 +386,12 @@ export const PieceMenu: React.FC = () => {
           className={item}
           onClick={run(() => (isolation ? store().clearIsolation() : store().isolateRun(comp.id)))}
         >
-          <Eye size={18} className="text-amber-300 shrink-0" />
+          <IconAislarLinea size={20} className="text-amber-300 shrink-0" />
           {isolation ? 'Ver todo el modelo' : 'Aislar esta línea'}
         </button>
 
         <button type="button" role="menuitem" className={`${item} !text-rose-300 border-t border-[#2b313d]`} onClick={run(() => store().deleteSelectedComponent())}>
-          <Trash2 size={18} className="shrink-0" />
+          <IconBorrar size={20} className="shrink-0" />
           Borrar
         </button>
       </div>

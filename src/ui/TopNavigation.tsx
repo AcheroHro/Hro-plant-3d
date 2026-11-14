@@ -4,8 +4,23 @@ import { useUiConfigStore } from '../store/useUiConfigStore';
 import { useProjectStore } from '../store/useProjectStore';
 import { PcfExporter } from '../core/exporters/PcfExporter';
 import { downloadFile } from '../utils/fileDownloader';
-import { Camera, Crosshair, Database, Download, FileText, FolderOpen, Layers, ListChecks, Maximize, Redo2, ShieldCheck, Trash2, Undo2, Upload } from 'lucide-react';
+import { Redo2, Undo2 } from 'lucide-react';
 import { MobileSheet } from './MobileSheet';
+import {
+  ActionIcon,
+  IconAbrirPcf,
+  IconBorrar,
+  IconChoques,
+  IconCortesMateriales,
+  IconExportarPcf,
+  IconInformeCampo,
+  IconPlanosIso,
+  IconProyecto,
+  IconSeguirBoca,
+  IconSpec,
+  IconSpools,
+  IconVistas
+} from './icons/ActionIcons';
 import { usePhoneLayout, vibrate } from './useIsPhone';
 
 const BUILT_IN_SPECS = ['RCI1', 'CS150', 'CS300', 'SS150'];
@@ -141,42 +156,36 @@ export const TopNavigation: React.FC = () => {
     </>
   );
 
-  // Teléfono: arriba solo lo que se usa trazando; el resto está en el panel "Más"
+  // Teléfono: arriba Archivo (proyecto, spec y todo lo que entra o sale de la app), deshacer y
+  // Vistas. Lo que se hace sobre el modelo está en la barra de abajo, según lo que esté elegido.
   if (phone) {
-    const more: { label: string; hint: string; Icon: typeof Undo2; onClick: () => void; tone?: string; disabled?: boolean }[] = [
-      { label: 'Proyectos', hint: projectName, Icon: FolderOpen, onClick: toggleProjects },
-      { label: 'Campo', hint: noteCount ? `${noteCount} nota${noteCount > 1 ? 's' : ''}` : 'Cambios y fotos', Icon: Camera, onClick: toggleField, tone: 'text-orange-300' },
-      { label: 'Abrir PCF', hint: 'Desde Plant 3D', Icon: Upload, onClick: () => pcfInputRef.current?.click(), tone: 'text-amber-300' },
-      { label: 'Exportar PCF', hint: 'Para PCF to Pipe', Icon: Download, onClick: handleQuickExportPcf, tone: 'text-sky-300', disabled: graph.components.size === 0 },
-      { label: 'Spools', hint: 'Taller y campo', Icon: Layers, onClick: toggleSpools, tone: 'text-amber-300' },
-      { label: 'Cortes y materiales', hint: 'Lista de materiales', Icon: ListChecks, onClick: toggleBom, tone: 'text-emerald-300' },
-      { label: 'Planos', hint: 'Isométricos y DXF', Icon: FileText, onClick: toggleExport, tone: 'text-sky-300' },
-      { label: 'Cargar spec', hint: '.pspc y .pspx', Icon: Database, onClick: () => fileInputRef.current?.click() },
-      { label: 'Encuadrar', hint: 'Ver todo el modelo', Icon: Maximize, onClick: frameAll },
-      { label: 'Revisar', hint: 'Avisos del modelo', Icon: ShieldCheck, onClick: () => useUiConfigStore.getState().setIssuesOpen(true), tone: 'text-emerald-300' },
+    type FileAction = { label: string; hint: string; Icon: ActionIcon; onClick: () => void; tone?: string; disabled?: boolean; keepOpen?: boolean };
+    const groups: { title: string; items: FileAction[] }[] = [
       {
-        label: cameraMode === 'ROUTE_MODE' ? 'Seguir boca: sí' : 'Seguir boca: no',
-        hint: 'La cámara va a la boca activa',
-        Icon: Crosshair,
-        onClick: handleModeToggle,
-        tone: cameraMode === 'ROUTE_MODE' ? 'text-[#38bdf8]' : undefined
+        title: 'Traer',
+        items: [
+          { label: 'Proyectos', hint: projectName, Icon: IconProyecto, onClick: toggleProjects },
+          { label: 'Abrir PCF', hint: 'Desde Plant 3D', Icon: IconAbrirPcf, onClick: () => pcfInputRef.current?.click(), tone: 'text-amber-300' },
+          { label: 'Cargar spec', hint: '.pspc y .pspx', Icon: IconSpec, onClick: () => fileInputRef.current?.click() }
+        ]
       },
       {
-        label: 'Reiniciar',
-        hint: 'Borra el modelo',
-        Icon: Trash2,
-        onClick: () => {
-          if (window.confirm('¿Borrar todo el modelo de este proyecto?')) void resetGraph();
-        },
-        tone: 'text-rose-400'
+        title: 'Entregar',
+        items: [
+          { label: 'Exportar PCF', hint: 'Para PCF to Pipe', Icon: IconExportarPcf, onClick: handleQuickExportPcf, tone: 'text-sky-300', disabled: graph.components.size === 0 },
+          { label: 'Informe de campo', hint: noteCount ? `${noteCount} nota${noteCount > 1 ? 's' : ''}` : 'Cambios y fotos', Icon: IconInformeCampo, onClick: toggleField, tone: 'text-orange-300' },
+          { label: 'Planos', hint: 'Isométricos y DXF', Icon: IconPlanosIso, onClick: toggleExport, tone: 'text-sky-300' },
+          { label: 'Spools', hint: 'Taller y campo', Icon: IconSpools, onClick: toggleSpools, tone: 'text-amber-300' },
+          { label: 'Cortes y materiales', hint: 'Lista de materiales', Icon: IconCortesMateriales, onClick: toggleBom, tone: 'text-emerald-300' },
+          { label: 'Revisar', hint: 'Avisos del modelo', Icon: IconChoques, onClick: () => useUiConfigStore.getState().setIssuesOpen(true), tone: 'text-emerald-300', keepOpen: true }
+        ]
       }
     ];
-    const selectCls =
-      'h-11 max-w-[5.5rem] rounded-lg bg-[#161920] border border-[#343b48] px-1.5 text-xs font-mono font-bold outline-none';
     const iconBtn = (enabled: boolean) =>
-      `w-11 h-11 rounded-lg border flex items-center justify-center shrink-0 ${
-        enabled ? 'bg-[#2b313d] border-[#3e4656] text-slate-100 active:bg-slate-700' : 'bg-[#161920] border-[#262b35] text-slate-600'
+      `w-11 h-11 rounded-xl border flex items-center justify-center shrink-0 ${
+        enabled ? 'bg-[#232833] border-[#3a4252] text-slate-100 active:bg-slate-700' : 'bg-[#161920] border-[#262b35] text-slate-600'
       }`;
+    const fieldCls = 'h-11 rounded-lg bg-[#111419] border border-[#343b48] px-2 text-sm font-bold outline-none';
     return (
       <>
         <header data-tour="top" className="absolute top-0 left-0 right-0 z-30 flex flex-col bg-[#1b1f26] border-b border-[#343b48] shadow-xl select-none">
@@ -184,80 +193,125 @@ export const TopNavigation: React.FC = () => {
           <div className="h-12 px-1.5 flex items-center gap-1.5">
             <button
               type="button"
-              onClick={toggleProjects}
-              className="h-11 flex-1 min-w-0 flex flex-col items-start justify-center bg-[#161920] border border-[#0696d7]/60 rounded-lg px-2"
+              data-tour="archivo"
+              aria-pressed={mobilePanel === 'mas'}
+              onClick={() => {
+                vibrate();
+                setMobilePanel('mas');
+              }}
+              className={`h-11 flex-1 min-w-0 flex items-center gap-2 rounded-xl border px-2.5 text-left ${
+                mobilePanel === 'mas' ? 'bg-[#0b3550] border-[#38bdf8]' : 'bg-[#161920] border-[#343b48]'
+              }`}
             >
-              <span className="text-[9px] uppercase text-slate-400 font-bold leading-none mb-0.5">Proyecto ▾</span>
-              <span className="text-xs font-bold text-slate-100 leading-tight truncate max-w-full">{projectName}</span>
+              <IconProyecto size={22} className="text-[#38bdf8] shrink-0" />
+              <span className="flex flex-col min-w-0">
+                <span className="text-[11px] text-slate-400 leading-none">Archivo</span>
+                <span className="text-sm font-bold text-slate-100 leading-tight truncate">
+                  {projectName} <span className="text-slate-400 font-medium">en {specCode}</span>
+                </span>
+              </span>
             </button>
-            <select
-              value={specCode}
-              onChange={(e) => loadBuiltInSpec(e.target.value)}
-              className={`${selectCls} text-[#38bdf8]`}
-              aria-label="Spec"
-            >
-              {specOptions.map((sp) => (
-                <option key={sp} value={sp} className="bg-[#161920] text-slate-100">
-                  {sp}
-                </option>
-              ))}
-            </select>
-            <select
-              value={nominalDiameter}
-              onChange={(e) => setNominalDiameter(Number(e.target.value))}
-              className={`${selectCls} text-emerald-400`}
-              aria-label="Diámetro nominal"
-            >
-              {availableDiameters.map((d) => (
-                <option key={d} value={d} className="bg-[#161920] text-slate-100">
-                  {formatNd(d)}
-                </option>
-              ))}
-            </select>
             <button type="button" onClick={undo} disabled={!canUndo} className={iconBtn(canUndo)} aria-label="Deshacer">
               <Undo2 size={20} />
             </button>
             <button type="button" onClick={redo} disabled={!canRedo} className={iconBtn(canRedo)} aria-label="Rehacer">
               <Redo2 size={20} />
             </button>
+            <button
+              type="button"
+              data-tour="vistas"
+              aria-pressed={mobilePanel === 'vistas'}
+              aria-label="Vistas"
+              onClick={() => {
+                vibrate();
+                setMobilePanel('vistas');
+              }}
+              className={`${iconBtn(true)} ${mobilePanel === 'vistas' ? '!bg-[#0b3550] !border-[#38bdf8] !text-[#38bdf8]' : ''}`}
+            >
+              <IconVistas size={22} />
+            </button>
           </div>
-          <div className="h-[22px] px-2 bg-[#14171d] border-t border-[#282d38] flex items-center text-[11px] text-slate-300 font-mono">
-            <span className="text-[#0696d7] font-bold shrink-0 mr-1.5">&gt;_</span>
+          <div className="h-[22px] px-2 bg-[#14171d] border-t border-[#282d38] flex items-center text-[11px] text-slate-300">
             <span className="truncate">{statusMessage}</span>
           </div>
         </header>
 
         {mobilePanel === 'mas' && (
-          <MobileSheet layout={phone} title="Más" onClose={() => setMobilePanel(null)} bodyClassName="p-3 space-y-3">
-            <label className="flex items-center gap-2 bg-[#111419] border border-[#343b48] rounded-lg px-3 h-11">
-              <span className="text-[10px] uppercase font-bold text-slate-400 shrink-0">Línea</span>
-              <input
-                type="text"
-                value={lineNumber}
-                onChange={(e) => setLineNumber(e.target.value)}
-                className="flex-1 min-w-0 bg-transparent text-sm font-mono font-bold text-amber-300 outline-none"
-                aria-label="Número de línea"
-              />
-            </label>
-            <div className="grid grid-cols-3 landscape:grid-cols-2 gap-2">
-              {more.map(({ label, hint, Icon, onClick, tone, disabled }) => (
-                <button
-                  key={label}
-                  type="button"
-                  disabled={disabled}
-                  onClick={() => {
-                    vibrate();
-                    onClick();
-                    // Lo que abre otra pantalla deja el modelo libre al volver
-                    if (Icon !== Crosshair && Icon !== ShieldCheck) setMobilePanel(null);
-                  }}
-                  className="min-h-[68px] rounded-xl bg-[#212631] border border-[#343c4c] px-1.5 py-2 flex flex-col items-center justify-center gap-1 active:bg-[#2b3240] disabled:opacity-40"
-                >
-                  <Icon size={22} className={tone ?? 'text-slate-200'} />
-                  <span className="text-xs font-bold text-slate-100 leading-none text-center">{label}</span>
-                  <span className="text-[10px] text-slate-400 leading-none truncate max-w-full">{hint}</span>
-                </button>
-              ))}
+          <MobileSheet layout={phone} title="Archivo" onClose={() => setMobilePanel(null)} bodyClassName="p-3 space-y-3">
+            <div className="grid grid-cols-2 gap-2">
+              <label className="flex flex-col gap-1">
+                <span className="text-xs text-slate-400">Spec</span>
+                <select value={specCode} onChange={(e) => loadBuiltInSpec(e.target.value)} className={`${fieldCls} text-[#38bdf8]`}>
+                  {specOptions.map((sp) => (
+                    <option key={sp} value={sp} className="bg-[#161920] text-slate-100">
+                      {sp}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="flex flex-col gap-1">
+                <span className="text-xs text-slate-400">Número de línea</span>
+                <input
+                  type="text"
+                  value={lineNumber}
+                  onChange={(e) => setLineNumber(e.target.value)}
+                  className={`${fieldCls} min-w-0 text-amber-300`}
+                />
+              </label>
+            </div>
+            {groups.map((group) => (
+              <div key={group.title} className="space-y-1.5">
+                <h3 className="text-xs font-semibold text-slate-400">{group.title}</h3>
+                <div className="grid grid-cols-3 landscape:grid-cols-2 gap-2">
+                  {group.items.map(({ label, hint, Icon, onClick, tone, disabled, keepOpen }) => (
+                    <button
+                      key={label}
+                      type="button"
+                      disabled={disabled}
+                      onClick={() => {
+                        vibrate();
+                        onClick();
+                        // Lo que abre otra pantalla deja el modelo libre al volver
+                        if (!keepOpen) setMobilePanel(null);
+                      }}
+                      className="min-h-[72px] rounded-xl bg-[#212631] border border-[#343c4c] px-1.5 py-2 flex flex-col items-center justify-center gap-1 active:bg-[#2b3240] disabled:opacity-40"
+                    >
+                      <Icon size={24} className={tone ?? 'text-slate-200'} />
+                      <span className="text-xs font-bold text-slate-100 leading-tight text-center">{label}</span>
+                      <span className="text-[11px] text-slate-400 leading-none truncate max-w-full">{hint}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))}
+            <div className="flex gap-2">
+              <button
+                type="button"
+                aria-pressed={cameraMode === 'ROUTE_MODE'}
+                onClick={() => {
+                  vibrate();
+                  handleModeToggle();
+                }}
+                className={`flex-1 h-11 rounded-xl border flex items-center justify-center gap-2 text-sm font-semibold ${
+                  cameraMode === 'ROUTE_MODE' ? 'bg-[#0b3550] border-[#38bdf8] text-[#38bdf8]' : 'bg-[#212631] border-[#343c4c] text-slate-200'
+                }`}
+              >
+                <IconSeguirBoca size={20} />
+                La cámara sigue la boca
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (window.confirm('¿Borrar todo el modelo de este proyecto?')) {
+                    void resetGraph();
+                    setMobilePanel(null);
+                  }
+                }}
+                className="h-11 px-3 rounded-xl bg-[#212631] border border-rose-900/70 text-rose-300 flex items-center gap-2 text-sm font-semibold"
+              >
+                <IconBorrar size={20} />
+                Vaciar
+              </button>
             </div>
           </MobileSheet>
         )}
