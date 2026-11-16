@@ -19,6 +19,8 @@ import { detectPipingCollisions } from '../viewport/collision/collisionDetector'
 import { calculateElbowPlacement } from '../core/math/elbowSolver';
 import { SerializedGraphState, FieldWeldKind, Component, ComponentType, NippleEndFinish, Port, SpecFitting, SupportKind, SupportMark } from '../types/piping';
 import { PcfImporter } from '../core/importers/PcfImporter';
+import { moveSupportTo } from '../core/graph/supportDimensions';
+import { applyElevation, planElevation } from '../core/graph/elevation';
 import { RoutePlan, planConnectionRoutes } from '../core/routing/connectRoutes';
 import { applySlope, centerlineForElevation, deflect, elbowForBend, planOffset, trimmedTakeOff } from '../core/routing/routeMath';
 
@@ -120,6 +122,10 @@ export interface PipingState {
   stretchPipe: (componentId: string, newLengthMm: number, anchor: 'start' | 'end') => void;
   /** Sustituye en el lugar el codo o la válvula elegidos por otra familia (y otro ángulo en codos) */
   substituteSelected: (familyId?: string, angle?: number) => void;
+  /** Cambia a mano el cara a cara de la válvula elegida; sin valor vuelve al de la spec */
+  setSelectedValveFaceToFace: (mm?: number) => void;
+  /** Sube o baja la pieza elegida hasta la elevación de eje `z`: los caños verticales se estiran */
+  setSelectedElevation: (z: number) => void;
   toggleMultiMode: (on?: boolean) => void;
   toggleMultiComponent: (componentId: string) => void;
   selectConnectedRun: () => void;
@@ -157,6 +163,8 @@ export interface PipingState {
     supportId: string,
     patch: Partial<Pick<SupportMark, 'kind' | 'tag' | 'plantType' | 'heightMm' | 'rotationDeg'>>
   ) => void;
+  /** Corre el soporte sobre su tramo para dejarlo a `mm` de lo que tiene del lado `side` */
+  moveSupport: (supportId: string, side: 'back' | 'ahead', mm: number) => void;
   cancelConnect: () => void;
   /** Carga la spec y el proyecto activo; devuelve el proyecto abierto */
   initialize: () => Promise<ProjectRecord | null>;
@@ -1095,6 +1103,21 @@ export const usePipingStore = create<PipingState>((set, get) => {
       }
     },
 
+    moveSupport: (supportId, side, mm) => {
+      const { graph } = get();
+      const mark = graph.supports.get(supportId);
+      if (!mark) return;
+      const before = mark.position.clone();
+      pushUndoSnapshot();
+      const problem = moveSupportTo(graph, mark, side, mm);
+      if (problem || before.distanceTo(mark.position) < 0.01) {
+        undoSnapshots.pop();
+        return set({ canUndo: undoSnapshots.length > 0, statusMessage: problem ?? 'El soporte ya está a esa medida.' });
+      }
+      saveGraphToIndexedDb(graph.serialize());
+      set({ version: get().version + 1, statusMessage: `Soporte corrido ${Math.round(before.distanceTo(mark.position))} mm sobre el caño.` });
+    },
+
     setNominalDiameter: (nd) => {
       const { graph, specReader, selectedPortId } = get();
       if (!specReader) return;
@@ -1922,7 +1945,7 @@ export const usePipingStore = create<PipingState>((set, get) => {
       if (!specReader || !comp) return;
       const nd = comp.ports[0]?.nominalDiameter || comp.parameters.nominalDiameter;
       const out = comp.ports[1];
-      if (out && graph.closesLoopThrough(comp.id, out.id)) {
+      if (comp.type !== 'FLANGE' && out && graph.closesLoopThrough(comp.id, out.id)) {
         set({ statusMessage: 'No se puede sustituir: la línea cierra un circuito y la pieza nueva no mide lo mismo.' });
         return;
       }
@@ -1942,8 +1965,20 @@ export const usePipingStore = create<PipingState>((set, get) => {
           pushUndoSnapshot();
           updated = graph.swapValve(comp.id, spec);
           name = spec.shortDescription;
+        } else if (comp.type === 'FLANGE') {
+          const spec = specReader.findFlange(nd, specCode, { familyId, pressureClass: comp.parameters.pressureClass });
+          if (!spec) return set({ statusMessage: `La spec no tiene esa brida en ${nd}".` });
+          pushUndoSnapshot();
+          try {
+            updated = graph.swapFlange(comp.id, spec);
+          } catch (e) {
+            get().undo();
+            redoSnapshots.pop();
+            return set({ canRedo: redoSnapshots.length > 0, statusMessage: `No se pudo sustituir la brida: ${(e as Error).message}` });
+          }
+          name = spec.shortDescription;
         } else {
-          return set({ statusMessage: 'Por ahora se pueden sustituir en el lugar codos y válvulas.' });
+          return set({ statusMessage: 'Se pueden sustituir en el lugar codos, válvulas y bridas.' });
         }
         if (!updated) {
           get().undo();
@@ -1956,11 +1991,55 @@ export const usePipingStore = create<PipingState>((set, get) => {
           activeDirection: active ? active.direction.clone().normalize() : get().activeDirection,
           collidingComponentIds: detectPipingCollisions(graph).collidingComponentIds,
           version: get().version + 1,
-          statusMessage: `Pieza sustituida por ${name}. Lo conectado a su salida se acomodó.`
+          statusMessage: `Pieza sustituida por ${name}. ${comp.type === 'ELBOW' ? 'Lo conectado a su salida se acomodó.' : 'El caño que sigue se ajustó al largo nuevo.'}`
         });
       } catch (e) {
         set({ statusMessage: `No se pudo sustituir: ${(e as Error).message}` });
       }
+    },
+
+    setSelectedElevation: (z) => {
+      const { graph, selectedComponentId } = get();
+      if (!selectedComponentId) return;
+      const plan = planElevation(graph, selectedComponentId, z);
+      if (typeof plan === 'string') return set({ statusMessage: `Elevación: ${plan}` });
+      if (Math.abs(plan.toZ - plan.fromZ) < 0.5) return set({ statusMessage: `Elevación: la pieza ya está en ${Math.round(z)} mm.` });
+      pushUndoSnapshot();
+      applyElevation(graph, plan);
+      saveGraphToIndexedDb(graph.serialize());
+      const dz = Math.round(plan.toZ - plan.fromZ);
+      const n = plan.moveIds.size;
+      const st = plan.stretch.length;
+      set({
+        collidingComponentIds: detectPipingCollisions(graph).collidingComponentIds,
+        version: get().version + 1,
+        statusMessage: `Elevación de eje ${Math.round(plan.toZ)} mm (${dz > 0 ? 'subió' : 'bajó'} ${Math.abs(dz)} mm): se ${n === 1 ? 'movió 1 pieza' : `movieron ${n} piezas`}${st ? ` y ${st === 1 ? 'se ajustó 1 caño vertical' : `se ajustaron ${st} caños verticales`}` : ''}.`
+      });
+    },
+
+    setSelectedValveFaceToFace: (mm) => {
+      const { graph, selectedComponentId } = get();
+      const comp = selectedComponentId ? graph.components.get(selectedComponentId) : null;
+      if (!comp || comp.type !== 'VALVE') return;
+      pushUndoSnapshot();
+      try {
+        graph.setValveFaceToFace(comp.id, mm);
+      } catch (e) {
+        get().undo();
+        redoSnapshots.pop();
+        return set({ canRedo: redoSnapshots.length > 0, statusMessage: `No se cambió el cara a cara: ${(e as Error).message}` });
+      }
+      saveGraphToIndexedDb(graph.serialize());
+      const ftf = Math.round((comp.parameters.faceToFace ?? 0) * 10) / 10;
+      const spec = comp.parameters.specFaceToFace;
+      set({
+        collidingComponentIds: detectPipingCollisions(graph).collidingComponentIds,
+        version: get().version + 1,
+        statusMessage:
+          spec !== undefined
+            ? `Cara a cara de la válvula: ${ftf} mm (la spec dice ${Math.round(spec * 10) / 10} mm). Plant la va a traer con el largo de su spec.`
+            : `Cara a cara de la válvula: ${ftf} mm, el de la spec.`
+      });
     },
 
     toggleMultiMode: (on) => {

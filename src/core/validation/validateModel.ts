@@ -19,7 +19,8 @@ export interface ModelIssue {
     | 'SEPARATE_RUNS'
     | 'OPEN_PORT'
     | 'SPEC_UNKNOWN'
-    | 'JOINT_SPEC';
+    | 'JOINT_SPEC'
+    | 'VALVE_LENGTH';
   severity: IssueSeverity;
   title: string;
   detail: string;
@@ -241,6 +242,21 @@ export function validateModel(graph: PipingGraph, options: ValidateOptions = {})
       severity: 'info',
       title: `Boca libre de ${port.nominalDiameter}" en ${name(comp)}`,
       detail: `Elevación de eje ${Math.round(port.position.z)} mm. Si es el final de la línea, va una tapa, una brida o un equipo.`,
+      componentIds: [comp.id]
+    });
+  }
+
+  // Válvulas con el cara a cara cambiado a mano: Plant las trae con el largo de su spec
+  for (const comp of graph.components.values()) {
+    const spec = comp.parameters.specFaceToFace;
+    if (comp.type !== 'VALVE' || spec === undefined) continue;
+    const now = comp.parameters.faceToFace ?? 0;
+    issues.push({
+      code: 'VALVE_LENGTH',
+      severity: 'info',
+      title: `${name(comp)} con otro cara a cara (${Math.round(now)} mm, la spec dice ${Math.round(spec)} mm)`,
+      detail:
+        'Es la medida de obra. Al importar el PCF, Plant pone la válvula de su spec con su largo y la unión puede quedar separada o encimada. Si la válvula real es otra, cargala en la spec de Plant.',
       componentIds: [comp.id]
     });
   }

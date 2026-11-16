@@ -43,7 +43,9 @@ const TOUCH: HelpGroup[] = [
     rows: [
       ['Tocar una pieza', 'La elige y la barra de abajo muestra lo que se le puede hacer: largo, partir, derivar, purga, soporte, diámetro, datos y borrar.'],
       ['Seguir (en la barra de la pieza)', 'Si la pieza tiene una boca libre, vuelve a trazar desde ahí.'],
-      ['Mantener apretada una pieza', 'Abre su menú: partir, derivar, girar o dar vuelta, soporte, sustituir, nota de campo, aislar, borrar.'],
+      ['Mantener apretada una pieza', 'Abre su menú: partir, derivar, girar o dar vuelta, elevación de eje, soporte, sustituir (codo, válvula o brida WN, SO, SW), nota de campo, aislar, borrar.'],
+      ['Tocar un soporte', 'Muestra las cotas hasta lo que tiene a cada lado (accesorio, otro soporte o boca libre). Tocá una cota o escribila en el editor y el soporte se corre; la otra se ajusta sola.'],
+      ['Válvula: cara a cara', 'En su menú o en Propiedades se escribe la medida de obra; el caño que sigue a la brida compensa. Plant la trae con el largo de su spec, por eso queda el aviso en la revisión.'],
       ['Dar vuelta o girar (en el menú)', 'Da vuelta una brida o el sentido de una válvula, pasa una reducción excéntrica de plano abajo a plano arriba y gira el volante.'],
       ['Purga o venteo (en Derivación)', 'Arma de un toque la derivación con su niple, válvula y tapa: la purga hacia abajo, el venteo hacia arriba.'],
       ['Cambiar diámetro del tramo (en el menú)', 'Cambia caños y accesorios del tramo por los de otro diámetro de la spec, sin mover los ejes.'],
@@ -103,7 +105,9 @@ const MOUSE: HelpGroup[] = [
     title: 'Corregir',
     rows: [
       ['Clic en una pieza', 'La elige y muestra sus propiedades.'],
-      ['Clic derecho en una pieza', 'Abre su menú: partir, derivar, girar o dar vuelta, soporte, sustituir, nota de campo, aislar, borrar.'],
+      ['Clic derecho en una pieza', 'Abre su menú: partir, derivar, girar o dar vuelta, elevación de eje, soporte, sustituir (codo, válvula o brida WN, SO, SW), nota de campo, aislar, borrar.'],
+      ['Tocar un soporte', 'Muestra las cotas hasta lo que tiene a cada lado (accesorio, otro soporte o boca libre). Tocá una cota o escribila en el editor y el soporte se corre; la otra se ajusta sola.'],
+      ['Válvula: cara a cara', 'En su menú o en Propiedades se escribe la medida de obra; el caño que sigue a la brida compensa. Plant la trae con el largo de su spec, por eso queda el aviso en la revisión.'],
       ['Dar vuelta o girar (en el menú)', 'Da vuelta una brida o el sentido de una válvula, pasa una reducción excéntrica de plano abajo a plano arriba y gira el volante.'],
       ['Purga o venteo (en Derivación)', 'Arma de un toque la derivación con su niple, válvula y tapa: la purga hacia abajo, el venteo hacia arriba.'],
       ['Cambiar diámetro del tramo (en el menú)', 'Cambia caños y accesorios del tramo por los de otro diámetro de la spec, sin mover los ejes.'],

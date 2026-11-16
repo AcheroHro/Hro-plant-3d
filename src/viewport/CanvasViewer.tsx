@@ -16,6 +16,7 @@ import { findScreenMagneticSnap } from './snapping/magneticSnap';
 import { buildModelLabels, ModelLabel } from './modelLabels';
 import { useUiConfigStore } from '../store/useUiConfigStore';
 import { useReferenceStore } from '../store/useReferenceStore';
+import { supportDimensions } from '../core/graph/supportDimensions';
 
 // Configurar orientación industrial estándar Z-Up globalmente
 THREE.Object3D.DEFAULT_UP.set(0, 0, 1);
@@ -98,6 +99,11 @@ export const CanvasViewer: React.FC = () => {
   const gripsRef = useRef<THREE.Object3D[]>([]);
   const dimRef = useRef<HTMLDivElement>(null);
   const dimPosRef = useRef<THREE.Vector3 | null>(null);
+  // Cotas del soporte elegido hasta lo que tiene a cada lado (se tocan para escribir la medida)
+  const supDimElsRef = useRef<(HTMLDivElement | null)[]>([null, null]);
+  const supDimPosRef = useRef<(THREE.Vector3 | null)[]>([null, null]);
+  const [supDimEdit, setSupDimEdit] = useState<{ side: 'back' | 'ahead'; text: string } | null>(null);
+  useEffect(() => setSupDimEdit(null), [selectedSupportId]);
   const dragStretchRef = useRef<{ compId: string; anchor: 'start' | 'end'; fixed: THREE.Vector3; dir: THREE.Vector3; length: number; start: number } | null>(null);
   const longPressRef = useRef<{ timer: number; fired: boolean } | null>(null);
   // Cubo de vistas: gira con la cámara; al tocar una cara la cámara va hasta esa vista
@@ -252,6 +258,19 @@ export const CanvasViewer: React.FC = () => {
           dim.style.transform = `translate(${Math.round(Math.max(4, Math.min(x, viewW - 150)))}px, ${Math.round(Math.max(y + 14, 4))}px)`;
           dim.style.visibility = 'visible';
         } else dim.style.visibility = 'hidden';
+      }
+
+      for (let i = 0; i < 2; i++) {
+        const el = supDimElsRef.current[i];
+        if (!el) continue;
+        const pos = supDimPosRef.current[i];
+        const ndc = pos ? pos.clone().project(camera) : null;
+        if (ndc && ndc.z < 1 && Math.abs(ndc.x) < 1.05 && Math.abs(ndc.y) < 1.05) {
+          const x = ((ndc.x + 1) / 2) * viewW;
+          const y = ((1 - ndc.y) / 2) * viewH;
+          el.style.transform = `translate(${Math.round(Math.max(4, Math.min(x, viewW - 60)))}px, ${Math.round(Math.max(y, 20))}px) translate(-50%, -50%)`;
+          el.style.visibility = 'visible';
+        } else el.style.visibility = 'hidden';
       }
 
       // Vista pedida desde el cubo: la cámara gira hasta ahí por el camino corto
@@ -539,6 +558,34 @@ export const CanvasViewer: React.FC = () => {
     if (supportMark && supportHost && (!visibleIds || visibleIds.has(supportHost.id))) {
       overlay.add(buildSupportObject(supportMark, supportHost, selectedMaterial));
       hidden.push([setPieceHidden(batches, `${SUPPORT_KEY}${supportMark.id}`, true), `${SUPPORT_KEY}${supportMark.id}`]);
+      // Cotas a cada lado, corridas del caño hacia arriba (o de costado si el caño es vertical)
+      const dims = supportDimensions(graph, supportMark);
+      if (dims) {
+        const side = Math.abs(dims.axis.z) > 0.9 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 0, 1);
+        side.addScaledVector(dims.axis, -side.dot(dims.axis)).normalize();
+        const off = side.multiplyScalar((supportHost.parameters.outerDiameter || 60) / 2 + 160);
+        const pts: THREE.Vector3[] = [];
+        const tick = (p: THREE.Vector3) => {
+          pts.push(p.clone().addScaledVector(off, 0.35), p.clone().addScaledVector(off, 1.12));
+          // Marca oblicua en la línea de cota, como en los planos
+          const a = p.clone().add(off);
+          const t = dims.axis.clone().multiplyScalar(30).add(off.clone().setLength(30));
+          pts.push(a.clone().sub(t), a.clone().add(t));
+        };
+        const ends = [dims.back, dims.ahead];
+        tick(supportMark.position);
+        ends.forEach((d, i) => {
+          tick(d.to);
+          pts.push(supportMark.position.clone().add(off), d.to.clone().add(off));
+          supDimPosRef.current[i] = d.distanceMm > 1 ? supportMark.position.clone().lerp(d.to, 0.5).add(off) : null;
+        });
+        const geo = new THREE.BufferGeometry().setFromPoints(pts);
+        const lines = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color: 0x67e8f9, depthTest: false, transparent: true }));
+        lines.renderOrder = 10;
+        overlay.add(lines);
+      }
+    } else {
+      supDimPosRef.current = [null, null];
     }
     pipeGroup.add(overlay);
 
@@ -1394,6 +1441,65 @@ export const CanvasViewer: React.FC = () => {
           )}
         </div>
       )}
+      {/* Cotas del soporte elegido: se tocan para escribir la distancia y el soporte se corre */}
+      {(() => {
+        const mark = selectedSupportId ? graph.supports.get(selectedSupportId) : undefined;
+        const dims = mark ? supportDimensions(graph, mark) : null;
+        return (['back', 'ahead'] as const).map((side, i) => {
+          const d = dims?.[side];
+          const editing = supDimEdit?.side === side;
+          return (
+            <div
+              key={side}
+              ref={(el) => {
+                supDimElsRef.current[i] = el;
+              }}
+              style={{ visibility: 'hidden' }}
+              className="absolute left-0 top-0"
+              data-support-dim={side}
+            >
+              {mark && d && d.distanceMm > 1 &&
+                (editing ? (
+                  <form
+                    onSubmit={(ev) => {
+                      ev.preventDefault();
+                      const value = parseFloat(supDimEdit.text);
+                      setSupDimEdit(null);
+                      if (Number.isFinite(value) && Math.abs(value - d.distanceMm) > 0.5) usePipingStore.getState().moveSupport(mark.id, side, value);
+                    }}
+                    className="flex items-center gap-1 p-1 rounded-xl bg-[#0f172a] border border-cyan-400 shadow-lg"
+                  >
+                    <input
+                      autoFocus
+                      type="number"
+                      inputMode="decimal"
+                      value={supDimEdit.text}
+                      onChange={(ev) => setSupDimEdit({ side, text: ev.target.value })}
+                      onFocus={(ev) => ev.target.select()}
+                      className="h-10 w-24 px-2 rounded-lg bg-[#1b1f26] text-base font-mono font-black text-cyan-200 outline-none"
+                      aria-label={`Distancia del soporte hasta ${d.label} en milímetros`}
+                    />
+                    <button type="submit" className="h-10 px-3 rounded-lg bg-cyan-600 text-white text-sm font-black">
+                      OK
+                    </button>
+                    <button type="button" onClick={() => setSupDimEdit(null)} className="h-10 w-9 rounded-lg text-slate-300" aria-label="Cancelar">
+                      ✕
+                    </button>
+                  </form>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setSupDimEdit({ side, text: String(Math.round(d.distanceMm)) })}
+                    className="h-8 px-2.5 rounded-full bg-[#082f49]/95 border border-cyan-400 text-cyan-100 font-mono font-bold text-xs shadow-lg active:scale-95 whitespace-nowrap"
+                    title={`Distancia hasta ${d.label}: tocá para cambiarla`}
+                  >
+                    {Math.round(d.distanceMm)} mm
+                  </button>
+                ))}
+            </div>
+          );
+        });
+      })()}
       {/* Cota del caño elegido: se toca para escribir el largo; mientras se estira muestra el largo nuevo */}
       <div ref={dimRef} style={{ visibility: 'hidden' }} className="absolute left-0 top-0">
         {(() => {

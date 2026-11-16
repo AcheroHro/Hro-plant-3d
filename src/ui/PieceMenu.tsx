@@ -9,6 +9,8 @@ import { useProjectStore } from '../store/useProjectStore';
 import { useUiConfigStore } from '../store/useUiConfigStore';
 import { usePhoneLayout, vibrate } from './useIsPhone';
 import { pieceName } from '../core/pieceNames';
+import { substituteOptions } from './substituteOptions';
+import { ElevationField } from './ElevationField';
 
 const BRANCH_AXES: { label: string; v: [number, number, number]; cls: string }[] = [
   { label: '+X', v: [1, 0, 0], cls: 'text-red-400' },
@@ -26,13 +28,6 @@ const SUPPORT_KINDS: { kind: SupportKind; label: string }[] = [
   { kind: 'COLGANTE', label: 'Colgante' }
 ];
 
-interface SubstituteOption {
-  key: string;
-  label: string;
-  familyId: string;
-  angle?: number;
-}
-
 /** Menú que aparece en el lugar al mantener apretada una pieza del modelo */
 export const PieceMenu: React.FC = () => {
   const menu = usePipingStore((s) => s.pieceMenu);
@@ -47,6 +42,7 @@ export const PieceMenu: React.FC = () => {
   const [section, setSection] = useState<'branch' | 'support' | 'size' | null>(null);
   const [runNd, setRunNd] = useState<number | null>(null);
   const [branchNd, setBranchNd] = useState<number | null>(null);
+  const [ftf, setFtf] = useState('');
 
   const comp = menu ? graph.components.get(menu.componentId) : undefined;
 
@@ -56,6 +52,8 @@ export const PieceMenu: React.FC = () => {
     setSection(menu?.section ?? null);
     setBranchNd(null);
     setRunNd(null);
+    const c = menu ? usePipingStore.getState().graph.components.get(menu.componentId) : undefined;
+    setFtf(c?.parameters.faceToFace !== undefined ? String(Math.round(c.parameters.faceToFace * 10) / 10) : '');
     if (!menu || !boxRef.current) return setPos(null);
     const { offsetWidth: w, offsetHeight: h } = boxRef.current;
     setPos({
@@ -71,27 +69,7 @@ export const PieceMenu: React.FC = () => {
     if (top !== pos.top) setPos({ ...pos, top });
   }, [showSubstitute, section, menu, pos]);
 
-  const substitutes = useMemo<SubstituteOption[]>(() => {
-    if (!comp || !specReader) return [];
-    const nd = comp.ports[0]?.nominalDiameter || comp.parameters.nominalDiameter;
-    const currentFamily = comp.parameters.familyId;
-    if (comp.type === 'ELBOW') {
-      const currentAngle = Math.abs((comp.parameters.angle || 90) - 45) < 15 ? 45 : 90;
-      return specReader.listFamilies('ELBOW', nd).flatMap((fam) =>
-        [90, 45]
-          .filter((a) => fam.angles.some((x) => Math.abs(x - a) < 1) && !(fam.familyId === currentFamily && a === currentAngle))
-          .map((a) => ({ key: `${fam.familyId}-${a}`, label: `${a}° · ${fam.familyDesc}`, familyId: fam.familyId, angle: a }))
-      );
-    }
-    if (comp.type === 'VALVE') {
-      const end = comp.ports[0]?.plantEndType;
-      return specReader
-        .listFamilies('VALVE', nd)
-        .filter((fam) => fam.familyId !== currentFamily && (!end || fam.endTypes[0] === end))
-        .map((fam) => ({ key: fam.familyId, label: fam.familyDesc, familyId: fam.familyId }));
-    }
-    return [];
-  }, [comp, specReader]);
+  const substitutes = useMemo(() => substituteOptions(comp, specReader), [comp, specReader]);
 
   if (!menu || !comp) return null;
 
@@ -285,6 +263,39 @@ export const PieceMenu: React.FC = () => {
               </div>
             )}
           </>
+        )}
+
+        <div className="px-3 py-2 border-b border-[#2b313d]">
+          <ElevationField compact onApplied={close} />
+        </div>
+        {comp.type === 'VALVE' && comp.parameters.faceToFace !== undefined && (
+          <div className="px-3 py-2 flex items-center gap-2 text-sm text-slate-100 border-b border-[#2b313d]">
+            <span className="flex-1">Cara a cara</span>
+            <input
+              type="number"
+              inputMode="decimal"
+              value={ftf}
+              onChange={(e) => setFtf(e.target.value)}
+              aria-label="Cara a cara de la válvula en milímetros"
+              className="w-20 h-9 px-2 rounded bg-[#0f1216] border border-[#3a4150] text-purple-300 font-mono font-bold text-sm"
+            />
+            <span className="text-xs text-slate-400">mm</span>
+            <button
+              type="button"
+              className="h-9 px-2 rounded bg-[#0696d7] text-white text-xs font-bold"
+              onClick={run(() => {
+                const v = parseFloat(ftf);
+                if (!isNaN(v)) store().setSelectedValveFaceToFace(v);
+              })}
+            >
+              Aplicar
+            </button>
+          </div>
+        )}
+        {comp.type === 'VALVE' && comp.parameters.specFaceToFace !== undefined && (
+          <button type="button" role="menuitem" className={`${item} !text-xs text-amber-300`} onClick={run(() => store().setSelectedValveFaceToFace(undefined))}>
+            Volver al cara a cara de la spec ({comp.parameters.specFaceToFace.toFixed(1)} mm)
+          </button>
         )}
 
         {substitutes.length > 0 && (

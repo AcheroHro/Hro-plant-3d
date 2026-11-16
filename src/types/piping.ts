@@ -168,6 +168,8 @@ export interface Component {
     branchTakeOff?: number;
     /** Longitud cara a cara en mm (para bridas, válvulas o reducciones) */
     faceToFace?: number;
+    /** Cara a cara de la spec cuando se cambió a mano el de la válvula (mm) */
+    specFaceToFace?: number;
     /** Diámetro de círculo de pernos (Bolt Circle) en mm */
     boltCircle?: number;
     /** Cantidad de agujeros para pernos */

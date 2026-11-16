@@ -3,6 +3,7 @@ import { RotateCcw, RotateCw, X } from 'lucide-react';
 import type { SupportKind } from '../types/piping';
 import { usePipingStore } from '../store/usePipingStore';
 import { PLANT_SUPPORT_TYPES, SUPPORT_KIND_NAMES, supportFrame } from '../core/graph/supportFrame';
+import { supportDimensions } from '../core/graph/supportDimensions';
 import { usePhoneLayout, vibrate } from './useIsPhone';
 import { IconBorrar, IconSoporte } from './icons/ActionIcons';
 
@@ -26,6 +27,15 @@ export const SupportEditor: React.FC<{ docked?: boolean }> = ({ docked = false }
   const [height, setHeight] = useState('');
   const [other, setOther] = useState('');
   const [otherOpen, setOtherOpen] = useState(false);
+  const dims = mark ? supportDimensions(graph, mark) : null;
+  const backMm = dims ? Math.round(dims.back.distanceMm) : 0;
+  const aheadMm = dims ? Math.round(dims.ahead.distanceMm) : 0;
+  const [backText, setBackText] = useState('');
+  const [aheadText, setAheadText] = useState('');
+  useEffect(() => {
+    setBackText(String(backMm));
+    setAheadText(String(aheadMm));
+  }, [mark?.id, backMm, aheadMm]);
   const frame = mark && host ? supportFrame(mark, host) : null;
   const reach = frame ? Math.round(frame.reachMm) : 0;
   useEffect(() => {
@@ -150,6 +160,46 @@ export const SupportEditor: React.FC<{ docked?: boolean }> = ({ docked = false }
           </label>
         ) : null}
 
+        {dims && (
+          <div className="flex flex-col gap-1.5" role="group" aria-label="Ubicación sobre el caño">
+            <span className="text-xs text-slate-400">Ubicación sobre el caño: escribí una cota y el soporte se corre (la otra se ajusta sola)</span>
+            {(['back', 'ahead'] as const).map((side) => {
+              const d = dims[side];
+              const text = side === 'back' ? backText : aheadText;
+              const setText = side === 'back' ? setBackText : setAheadText;
+              const current = side === 'back' ? backMm : aheadMm;
+              const apply = (value: number) => {
+                if (!Number.isFinite(value) || Math.round(value) === current) return setText(String(current));
+                vibrate();
+                store().moveSupport(mark.id, side, value);
+              };
+              return (
+                <div key={side} className="flex items-center gap-1.5">
+                  <span className="w-24 shrink-0 text-xs text-cyan-200 leading-tight truncate" title={d.label}>
+                    Hasta {d.label}
+                  </span>
+                  <button type="button" aria-label={`Acercar 50 milímetros a ${d.label}`} onClick={() => apply(current - 50)} className={`${small} w-11`}>
+                    −
+                  </button>
+                  <input
+                    inputMode="numeric"
+                    aria-label={`Distancia hasta ${d.label} en milímetros`}
+                    value={text}
+                    onChange={(e) => setText(e.target.value.replace(/[^0-9.]/g, ''))}
+                    onBlur={() => apply(Number(text))}
+                    onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
+                    className={`${field} flex-1 text-center tabular-nums text-cyan-200 border-cyan-500/60`}
+                  />
+                  <button type="button" aria-label={`Alejar 50 milímetros de ${d.label}`} onClick={() => apply(current + 50)} className={`${small} w-11`}>
+                    +
+                  </button>
+                  <span className="text-xs text-slate-400">mm</span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
         <div className="flex flex-col gap-1">
           <label htmlFor="support-height" className="text-xs text-slate-400">
             Altura: del eje del caño al punto de apoyo
@@ -209,7 +259,7 @@ export const SupportEditor: React.FC<{ docked?: boolean }> = ({ docked = false }
   return (
     <section
       aria-label="Soporte elegido"
-      className="fixed z-40 top-[96px] left-1/2 -translate-x-1/2 w-[380px] max-h-[70vh] flex flex-col bg-[#161a22]/97 backdrop-blur-xl border border-[#323946] rounded-2xl shadow-2xl pointer-events-auto"
+      className="fixed z-40 top-[96px] right-[120px] w-[380px] max-h-[75vh] flex flex-col bg-[#161a22]/97 backdrop-blur-xl border border-[#323946] rounded-2xl shadow-2xl pointer-events-auto"
     >
       {body}
     </section>

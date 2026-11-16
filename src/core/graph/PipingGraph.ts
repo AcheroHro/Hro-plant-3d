@@ -636,6 +636,11 @@ export class PipingGraph {
   public translateDownstream(startPortId: string, blockedComponentId: string, delta: THREE.Vector3): void {
     if (delta.lengthSq() < 1e-8) return;
     const { componentIds, jointIds } = this.getDownstreamSubgraph(startPortId, blockedComponentId);
+    this.translateGroup(componentIds, jointIds, delta);
+  }
+
+  /** Traslada rígidamente un grupo de piezas, sus uniones y los soportes de sus caños */
+  public translateGroup(componentIds: Set<string>, jointIds: Iterable<string>, delta: THREE.Vector3): void {
     for (const s of this.supportsOnComponents(componentIds)) s.position.add(delta);
 
     for (const compId of componentIds) {
@@ -903,13 +908,9 @@ export class PipingGraph {
   public swapValve(componentId: string, valveSpec: SpecFitting): Component | null {
     const comp = this.components.get(componentId);
     if (!comp || comp.type !== 'VALVE' || comp.ports.length < 2) return null;
-    const [portIn, portOut] = comp.ports;
-    const dir = portOut.direction.clone().normalize();
-    const span = valveSpec.faceToFace || comp.parameters.faceToFace || portIn.position.distanceTo(portOut.position);
-    const newOut = portIn.position.clone().addScaledVector(dir, span);
-    if (portOut.connectedJointId) this.translateDownstream(portOut.id, comp.id, newOut.clone().sub(portOut.position));
-    portOut.position.copy(newOut);
-    comp.centerline = [portIn.position.clone(), newOut.clone()];
+    const span = valveSpec.faceToFace || comp.parameters.faceToFace || comp.ports[0].position.distanceTo(comp.ports[1].position);
+    if (this.moveValveOutlet(comp, span, true)) return null;
+    this.moveValveOutlet(comp, span, false);
     comp.specCode = valveSpec.specCode;
     comp.catalogId = String(valveSpec.pnpid);
     Object.assign(comp.parameters, {
@@ -918,7 +919,145 @@ export class PipingGraph {
       description: valveSpec.shortDescription,
       ...this.specParameters(valveSpec)
     });
+    delete comp.parameters.specFaceToFace;
     delete comp.parameters.pcf;
+    return comp;
+  }
+
+  /** Pone la salida de una válvula a `span` de la entrada; el caño de después compensa si puede */
+  private moveValveOutlet(comp: Component, span: number, dryRun: boolean): string | null {
+    const [portIn, portOut] = comp.ports;
+    const dir = portOut.direction.clone().normalize();
+    const delta = portIn.position.clone().addScaledVector(dir, span).sub(portOut.position);
+    const problem = this.shiftEnd(comp, portOut, delta, dryRun);
+    if (!problem && !dryRun) comp.centerline = [portIn.position.clone(), portOut.position.clone()];
+    return problem;
+  }
+
+  /**
+   * Cambia a mano el cara a cara de una válvula (la medida de obra). La entrada queda fija y el
+   * caño que sigue a la brida de salida compensa. Sin `mm` vuelve al largo de la spec.
+   */
+  public setValveFaceToFace(componentId: string, mm?: number): Component {
+    const comp = this.components.get(componentId);
+    if (!comp || comp.type !== 'VALVE' || comp.ports.length !== 2) throw new Error('Esa pieza no es una válvula de dos bocas.');
+    const spec = comp.parameters.specFaceToFace ?? comp.parameters.faceToFace ?? comp.ports[0].position.distanceTo(comp.ports[1].position);
+    const target = mm === undefined ? spec : Math.round(mm * 10) / 10;
+    if (!Number.isFinite(target) || target < 10) throw new Error('El cara a cara tiene que ser de 10 mm o más.');
+    const problem = this.moveValveOutlet(comp, target, true);
+    if (problem) throw new Error(problem);
+    this.moveValveOutlet(comp, target, false);
+    comp.parameters.faceToFace = target;
+    if (Math.abs(target - spec) < 0.05) delete comp.parameters.specFaceToFace;
+    else comp.parameters.specFaceToFace = spec;
+    return comp;
+  }
+
+  /**
+   * Corre el extremo de una pieza en `delta`. Si del otro lado hay un caño alineado, el caño se
+   * estira o se acorta y el resto de la línea queda quieto; si no, se corre todo lo que sigue.
+   * Devuelve un mensaje si no se puede (caño demasiado corto o circuito cerrado), sin tocar nada.
+   */
+  private shiftEnd(comp: Component, port: Port, delta: THREE.Vector3, dryRun: boolean): string | null {
+    if (delta.lengthSq() < 1e-8) return null;
+    const mate = this.matedPort(port);
+    const host = mate ? this.components.get(mate.componentId) : null;
+    // Una brida o junta pegada (por ejemplo la de una válvula) viaja entera y el caño de después compensa
+    if (mate && host && (host.type === 'FLANGE' || host.type === 'GASKET') && host.ports.length === 2 && !this.oletsOn(host).length) {
+      const next = host.ports[0].id === mate.id ? host.ports[1] : host.ports[0];
+      const nextMate = this.matedPort(next);
+      const nextHost = nextMate ? this.components.get(nextMate.componentId) : null;
+      if (nextHost?.type === 'PIPE') {
+        const problem = this.shiftEnd(host, next, delta, true);
+        if (problem || dryRun) return problem;
+        this.shiftEnd(host, next, delta, false);
+        mate.position.add(delta);
+        for (const pt of host.centerline) pt.add(delta);
+        const joint = port.connectedJointId ? this.joints.get(port.connectedJointId) : null;
+        if (joint) joint.position.add(delta);
+        port.position.add(delta);
+        return null;
+      }
+    }
+    if (mate && host && host.type === 'PIPE' && host.ports.length >= 2) {
+      const other = host.ports[0].id === mate.id ? host.ports[1] : host.ports[0];
+      const axis = mate.position.clone().sub(other.position);
+      const length = axis.length();
+      axis.normalize();
+      const along = delta.dot(axis);
+      // El caño solo absorbe corrimientos sobre su eje
+      if (delta.clone().addScaledVector(axis, -along).length() < 0.05) {
+        const newLength = length + along;
+        if (newLength < 20) return `El caño que sigue quedaría de ${Math.round(newLength)} mm: no entra.`;
+        if (dryRun) return null;
+        mate.position.add(delta);
+        host.centerline[host.ports.indexOf(mate)]?.copy(mate.position);
+        host.parameters.cutLength = newLength;
+        host.parameters.grossLength = newLength;
+        const joint = port.connectedJointId ? this.joints.get(port.connectedJointId) : null;
+        if (joint) joint.position.add(delta);
+        port.position.add(delta);
+        return null;
+      }
+    }
+    if (port.connectedJointId && this.closesLoopThrough(comp.id, port.id))
+      return 'La línea cierra un circuito: no se puede correr lo que sigue.';
+    if (dryRun) return null;
+    if (port.connectedJointId) this.translateDownstream(port.id, comp.id, delta);
+    port.position.add(delta);
+    return null;
+  }
+
+  /**
+   * Sustituye una brida por otra de la spec (WN, SO, SW...). La cara queda donde está, porque ahí
+   * van la junta y la otra brida; el lado caño se acomoda al largo nuevo y el caño que sigue
+   * compensa. La unión con el caño se vuelve a resolver (a tope, solapada, enchufe).
+   */
+  public swapFlange(componentId: string, flangeSpec: SpecFitting): Component {
+    const comp = this.components.get(componentId);
+    if (!comp || comp.type !== 'FLANGE' || comp.ports.length !== 2) throw new Error('Esa pieza no es una brida de dos bocas.');
+    const facePort = comp.ports.find((p) => isFaceEnd(p));
+    const pipePort = comp.ports.find((p) => p !== facePort);
+    if (!facePort || !pipePort) throw new Error('No se reconoce la cara de esta brida.');
+    const ends = flangeSpec.plantEndTypes;
+    let faceIdx = ends ? ends.findIndex((e) => FACE_ENDS.has(e.toUpperCase())) : 0;
+    if (faceIdx < 0) faceIdx = 0;
+    const span = flangeSpec.faceToFace || comp.parameters.faceToFace || facePort.position.distanceTo(pipePort.position);
+    const dir = pipePort.direction.clone().normalize();
+    const delta = facePort.position.clone().addScaledVector(dir, span).sub(pipePort.position);
+
+    const problem = this.shiftEnd(comp, pipePort, delta, true);
+    if (problem) throw new Error(problem);
+    this.shiftEnd(comp, pipePort, delta, false);
+
+    const refresh = (port: Port, specIndex: number) =>
+      Object.assign(port, this.portFromSpec(comp.id, port.index, port.position, port.direction, flangeSpec, specIndex), {
+        id: port.id,
+        connectedJointId: port.connectedJointId
+      });
+    refresh(facePort, faceIdx);
+    refresh(pipePort, 1 - faceIdx);
+    if (!ends) {
+      facePort.endType = 'FLANG';
+      pipePort.endType = flangeSpec.endType;
+    }
+    comp.centerline = [comp.ports[0].position.clone(), comp.ports[1].position.clone()];
+    comp.specCode = flangeSpec.specCode;
+    comp.catalogId = String(flangeSpec.pnpid);
+    Object.assign(comp.parameters, {
+      nominalDiameter: flangeSpec.nominalDiameter,
+      outerDiameter: flangeSpec.outerDiameter,
+      wallThickness: flangeSpec.wallThickness,
+      schedule: flangeSpec.schedule,
+      faceToFace: span,
+      boltCircle: flangeSpec.boltCircle || comp.parameters.boltCircle,
+      boltHoles: flangeSpec.boltHoles || comp.parameters.boltHoles,
+      description: flangeSpec.shortDescription,
+      ...this.specParameters(flangeSpec)
+    });
+    delete comp.parameters.pcf;
+    this.refreshJoint(facePort);
+    this.refreshJoint(pipePort);
     return comp;
   }
 

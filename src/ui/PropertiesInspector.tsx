@@ -7,6 +7,8 @@ import {
 } from '../store/useUiConfigStore';
 import { NippleEndFinish } from '../types/piping';
 import { pieceName } from '../core/pieceNames';
+import { substituteOptions } from './substituteOptions';
+import { ElevationField } from './ElevationField';
 import { FloatingPalette } from './FloatingPalette';
 import { usePhoneLayout } from './useIsPhone';
 
@@ -27,6 +29,9 @@ export const PropertiesInspector: React.FC = () => {
   const updateComponentMetadata = usePipingStore((s) => s.updateComponentMetadata);
   const splitSelectedPipeWithFitting = usePipingStore((s) => s.splitSelectedPipeWithFitting);
   const deleteSelectedComponent = usePipingStore((s) => s.deleteSelectedComponent);
+  const substituteSelected = usePipingStore((s) => s.substituteSelected);
+  const setSelectedValveFaceToFace = usePipingStore((s) => s.setSelectedValveFaceToFace);
+  const specReader = usePipingStore((s) => s.specReader);
 
   const propertiesPalette = useUiConfigStore((s) => s.palettes.properties);
   const togglePaletteCollapsed = useUiConfigStore((s) => s.togglePaletteCollapsed);
@@ -44,6 +49,10 @@ export const PropertiesInspector: React.FC = () => {
   const [splitOffset, setSplitOffset] = useState<string>('');
   const [editTag, setEditTag] = useState<string>('');
   const [editLine, setEditLine] = useState<string>('');
+  const [editFtf, setEditFtf] = useState<string>('');
+  // Se vuelve a calcular con cada cambio del modelo: la pieza cambia de familia en el lugar
+  const substitutes = substituteOptions(selectedComp, specReader);
+  void version;
 
   // Regla principal solicitada:
   // La paleta de propiedades se pliega automáticamente cuando no hay pieza seleccionada
@@ -58,6 +67,7 @@ export const PropertiesInspector: React.FC = () => {
     if (!selectedComp) return;
     setEditTag(selectedComp.parameters.nippleTag || '');
     setEditLine(selectedComp.parameters.lineNumber || globalLineNumber);
+    if (selectedComp.parameters.faceToFace !== undefined) setEditFtf(String(Math.round(selectedComp.parameters.faceToFace * 10) / 10));
 
     if (selectedComp.type === 'PIPE') {
       const len =
@@ -504,13 +514,79 @@ export const PropertiesInspector: React.FC = () => {
                           </span>
                         </div>
                       )}
-                      {selectedComp.parameters.faceToFace !== undefined && (
+                      {selectedComp.parameters.faceToFace !== undefined && selectedComp.type !== 'VALVE' && (
                         <div className="col-span-2 flex justify-between">
                           <span className="text-slate-400">Cara a cara:</span>
                           <span className="text-purple-300">
                             {selectedComp.parameters.faceToFace.toFixed(1)} mm
                           </span>
                         </div>
+                      )}
+                      {selectedComp.parameters.faceToFace !== undefined && selectedComp.type === 'VALVE' && (
+                        <div className="col-span-2 flex flex-col gap-1">
+                          <div className="flex items-center gap-1">
+                            <span className="text-slate-400 shrink-0">Cara a cara (mm):</span>
+                            <input
+                              type="number"
+                              inputMode="decimal"
+                              value={editFtf}
+                              onChange={(e) => setEditFtf(e.target.value)}
+                              onKeyDown={(e) => {
+                                const v = parseFloat(editFtf);
+                                if (e.key === 'Enter' && !isNaN(v)) setSelectedValveFaceToFace(v);
+                              }}
+                              aria-label="Cara a cara de la válvula en milímetros"
+                              className="w-20 px-1.5 py-0.5 rounded bg-[#111418] border border-[#3a4150] text-purple-300 font-mono font-bold text-[10px] focus:outline-none focus:border-[#38bdf8]"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const v = parseFloat(editFtf);
+                                if (!isNaN(v)) {
+                                  vibrate(15);
+                                  setSelectedValveFaceToFace(v);
+                                }
+                              }}
+                              className="px-2 py-0.5 rounded bg-[#0696d7] hover:bg-[#0582ba] text-white font-bold text-[10px] active:scale-95"
+                            >
+                              Aplicar
+                            </button>
+                          </div>
+                          {selectedComp.parameters.specFaceToFace !== undefined && (
+                            <div className="flex items-center gap-1 text-[9px] text-amber-300">
+                              <span className="flex-1">
+                                La spec dice {selectedComp.parameters.specFaceToFace.toFixed(1)} mm. Plant la trae con el largo de su spec.
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => setSelectedValveFaceToFace(undefined)}
+                                className="px-1.5 py-0.5 rounded bg-[#232832] border border-[#3a4150] text-slate-200 font-bold"
+                              >
+                                Volver a la spec
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      {substitutes.length > 0 && (
+                        <label className="col-span-2 flex items-center gap-1 pt-0.5">
+                          <span className="text-slate-400 shrink-0">Sustituir por:</span>
+                          <select
+                            value=""
+                            onChange={(e) => {
+                              const opt = substitutes.find((o) => o.key === e.target.value);
+                              if (opt) substituteSelected(opt.familyId, opt.angle);
+                            }}
+                            className="flex-1 min-w-0 px-1 py-0.5 rounded bg-[#111418] border border-[#3a4150] text-sky-300 text-[10px]"
+                          >
+                            <option value="">Elegir…</option>
+                            {substitutes.map((o) => (
+                              <option key={o.key} value={o.key}>
+                                {o.label}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
                       )}
                     </div>
                   )}
@@ -700,6 +776,11 @@ export const PropertiesInspector: React.FC = () => {
                 )}
               </div>
             )}
+
+            {/* Elevación del eje: sube o baja la pieza y estira los caños verticales */}
+            <div className="bg-[#1b2029] border border-[#2d3545] rounded-md p-2">
+              <ElevationField />
+            </div>
 
             {/* SECCIÓN 5: ACCIONES DE MODELADO 3D EN LA PIEZA */}
             {(propertyFields.branchSelection ||
