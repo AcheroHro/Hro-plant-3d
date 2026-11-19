@@ -1,6 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
-import { X } from 'lucide-react';
+import { ChevronDown, ChevronUp, X } from 'lucide-react';
 import type { Component, Port } from '../types/piping';
 import { usePipingStore } from '../store/usePipingStore';
 import { useUiConfigStore } from '../store/useUiConfigStore';
@@ -45,41 +45,80 @@ interface DockAction {
  * - Una boca libre (o el modelo vacío): dirección, largo y ayudas para trazar, y poner una pieza.
  * - Una pieza: lo que se le puede hacer a esa pieza.
  * - Nada: cómo elegir desde dónde seguir.
- * Archivo y Vistas están arriba; un panel abierto (Piezas, Datos, Vistas, Archivo) la tapa.
+ * En vertical se puede deslizar o tocar la manija para colapsarla y dejar casi toda la pantalla al 3D.
  */
 export const ContextDock: React.FC = () => {
   const layout = usePhoneLayout();
   const mobilePanel = useUiConfigStore((s) => s.mobilePanel);
+  const dockCollapsed = useUiConfigStore((s) => s.dockCollapsed);
+  const setDockCollapsed = useUiConfigStore((s) => s.setDockCollapsed);
+  const toggleDockCollapsed = useUiConfigStore((s) => s.toggleDockCollapsed);
   const graph = usePipingStore((s) => s.graph);
   usePipingStore((s) => s.version);
   const selectedComponentId = usePipingStore((s) => s.selectedComponentId);
   const selectedPortId = usePipingStore((s) => s.selectedPortId);
   const multiMode = usePipingStore((s) => s.multiMode);
   const selectedSupportId = usePipingStore((s) => s.selectedSupportId);
+  const dragStartY = useRef<number | null>(null);
 
   if (!layout || multiMode) return null;
   if (mobilePanel && mobilePanel !== 'trazar') return null;
 
+  const isPortrait = layout === 'portrait';
+  const collapsed = isPortrait && dockCollapsed && !selectedSupportId;
   const comp = selectedComponentId ? graph.components.get(selectedComponentId) : undefined;
   const port = selectedPortId ? graph.ports.get(selectedPortId) : undefined;
   const openPort = port && !port.connectedJointId ? port : undefined;
+
+  const onHandleDown = (e: React.PointerEvent) => {
+    dragStartY.current = e.clientY;
+    try {
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    } catch {
+      // Sin captura
+    }
+  };
+  const onHandleUp = (e: React.PointerEvent) => {
+    if (dragStartY.current === null) return;
+    const dy = e.clientY - dragStartY.current;
+    dragStartY.current = null;
+    vibrate(8);
+    if (dy > 28) setDockCollapsed(true);
+    else if (dy < -28) setDockCollapsed(false);
+    else toggleDockCollapsed();
+  };
 
   return (
     <section
       aria-label={selectedSupportId ? 'Soporte elegido' : comp ? `Acciones de ${pieceName(comp.type)}` : 'Trazar'}
       data-tour="dock"
-      className={`fixed z-40 flex flex-col bg-[#161a22]/97 backdrop-blur-xl border-[#323946] shadow-2xl pointer-events-auto ${
-        layout === 'portrait'
-          ? 'left-0 right-0 bottom-0 max-h-[60vh] rounded-t-2xl border-t dock-safe'
+      className={`fixed z-40 flex flex-col bg-[#161a22]/97 backdrop-blur-xl border-[#323946] shadow-2xl pointer-events-auto transition-[max-height] duration-200 ${
+        isPortrait
+          ? `left-0 right-0 bottom-0 ${collapsed ? 'max-h-[96px]' : 'max-h-[60vh]'} rounded-t-2xl border-t dock-safe`
           : 'right-0 bottom-0 mobile-sheet-top w-[min(380px,50vw)] border-l'
       }`}
     >
+      {isPortrait && !selectedSupportId && (
+        <button
+          type="button"
+          onPointerDown={onHandleDown}
+          onPointerUp={onHandleUp}
+          onPointerCancel={() => {
+            dragStartY.current = null;
+          }}
+          aria-expanded={!collapsed}
+          aria-label={collapsed ? 'Expandir barra de herramientas' : 'Colapsar barra de herramientas para ver más 3D'}
+          className="w-full h-5 flex items-center justify-center shrink-0 rounded-t-2xl active:bg-white/5 touch-none"
+        >
+          <span className="w-10 h-1 rounded-full bg-slate-500/70" />
+        </button>
+      )}
       {selectedSupportId ? (
         <SupportEditor docked />
       ) : comp ? (
-        <PieceDock comp={comp} openPort={openPort} />
+        <PieceDock comp={comp} openPort={openPort} collapsed={collapsed} canCollapse={isPortrait} onToggleCollapse={toggleDockCollapsed} />
       ) : (
-        <PortDock openPort={openPort} />
+        <PortDock openPort={openPort} collapsed={collapsed} canCollapse={isPortrait} onToggleCollapse={toggleDockCollapsed} />
       )}
     </section>
   );
@@ -92,19 +131,50 @@ const DockHeader: React.FC<{
   band: string;
   title: string;
   subtitle: string;
+  collapsed?: boolean;
+  canCollapse?: boolean;
+  onToggleCollapse?: () => void;
   children?: React.ReactNode;
-}> = ({ Icon, tone, band, title, subtitle, children }) => (
-  <div className={`flex items-center gap-2.5 pl-3 pr-2 py-2 shrink-0 border-b border-[#2b313d] rounded-t-2xl ${band}`}>
+}> = ({ Icon, tone, band, title, subtitle, collapsed, canCollapse, onToggleCollapse, children }) => (
+  <div className={`flex items-center gap-2 pl-3 pr-2 py-2 shrink-0 border-b border-[#2b313d] ${canCollapse ? '' : 'rounded-t-2xl'} ${band}`}>
     <Icon size={26} className={`${tone} shrink-0`} />
-    <div className="flex flex-col min-w-0 flex-1">
+    <div
+      className="flex flex-col min-w-0 flex-1"
+      onClick={
+        canCollapse && onToggleCollapse
+          ? () => {
+              vibrate(8);
+              onToggleCollapse();
+            }
+          : undefined
+      }
+    >
       <span className="text-[15px] font-bold text-slate-100 leading-tight truncate">{title}</span>
       <span className="text-xs text-slate-400 leading-tight truncate">{subtitle}</span>
     </div>
     {children}
+    {canCollapse && onToggleCollapse && (
+      <button
+        type="button"
+        onClick={() => {
+          vibrate(8);
+          onToggleCollapse();
+        }}
+        aria-label={collapsed ? 'Expandir barra' : 'Colapsar barra'}
+        className="w-9 h-11 rounded-xl text-slate-300 active:bg-slate-700 flex items-center justify-center shrink-0"
+      >
+        {collapsed ? <ChevronUp size={20} /> : <ChevronDown size={20} />}
+      </button>
+    )}
   </div>
 );
 
-const PortDock: React.FC<{ openPort?: Port }> = ({ openPort }) => {
+const PortDock: React.FC<{
+  openPort?: Port;
+  collapsed: boolean;
+  canCollapse: boolean;
+  onToggleCollapse: () => void;
+}> = ({ openPort, collapsed, canCollapse, onToggleCollapse }) => {
   const graph = usePipingStore((s) => s.graph);
   const specReader = usePipingStore((s) => s.specReader);
   const nominalDiameter = usePipingStore((s) => s.nominalDiameter);
@@ -122,11 +192,23 @@ const PortDock: React.FC<{ openPort?: Port }> = ({ openPort }) => {
       band="bg-emerald-500/10"
       title={`Boca libre de ${size(openPort.nominalDiameter)}`}
       subtitle={`${portComp ? `En ${pieceName(portComp.type).toLowerCase()}, sale` : 'Sale'} ${dirName(openPort.direction)}`}
+      collapsed={collapsed}
+      canCollapse={canCollapse}
+      onToggleCollapse={onToggleCollapse}
     >
       <PieceButton onClick={() => setMobilePanel('piezas', false)} />
     </DockHeader>
   ) : empty ? (
-    <DockHeader Icon={IconTrazar} tone="text-[#38bdf8]" band="bg-sky-500/10" title="Primer tramo" subtitle="Elegí el diámetro, hacia dónde va y el largo">
+    <DockHeader
+      Icon={IconTrazar}
+      tone="text-[#38bdf8]"
+      band="bg-sky-500/10"
+      title="Primer tramo"
+      subtitle="Elegí el diámetro, hacia dónde va y el largo"
+      collapsed={collapsed}
+      canCollapse={canCollapse}
+      onToggleCollapse={onToggleCollapse}
+    >
       <label className="sr-only" htmlFor="dock-nd">
         Diámetro
       </label>
@@ -144,15 +226,26 @@ const PortDock: React.FC<{ openPort?: Port }> = ({ openPort }) => {
       </select>
     </DockHeader>
   ) : (
-    <DockHeader Icon={IconBocaLibre} tone="text-amber-300" band="bg-amber-500/10" title="Elegí desde dónde seguir" subtitle="Tocá una boca libre para trazar o una pieza para corregirla" />
+    <DockHeader
+      Icon={IconBocaLibre}
+      tone="text-amber-300"
+      band="bg-amber-500/10"
+      title="Elegí desde dónde seguir"
+      subtitle="Tocá una boca libre para trazar o una pieza para corregirla"
+      collapsed={collapsed}
+      canCollapse={canCollapse}
+      onToggleCollapse={onToggleCollapse}
+    />
   );
 
   return (
     <>
       {header}
-      <div className="overflow-y-auto overscroll-contain p-2" style={{ touchAction: 'pan-y' }}>
-        <TouchNumpad embedded />
-      </div>
+      {!collapsed && (
+        <div className="overflow-y-auto overscroll-contain p-2" style={{ touchAction: 'pan-y' }}>
+          <TouchNumpad embedded />
+        </div>
+      )}
     </>
   );
 };
@@ -172,7 +265,13 @@ const PieceButton: React.FC<{ onClick: () => void }> = ({ onClick }) => (
   </button>
 );
 
-const PieceDock: React.FC<{ comp: Component; openPort?: Port }> = ({ comp, openPort }) => {
+const PieceDock: React.FC<{
+  comp: Component;
+  openPort?: Port;
+  collapsed: boolean;
+  canCollapse: boolean;
+  onToggleCollapse: () => void;
+}> = ({ comp, openPort, collapsed, canCollapse, onToggleCollapse }) => {
   const graph = usePipingStore((s) => s.graph);
   const specReader = usePipingStore((s) => s.specReader);
   const setMobilePanel = useUiConfigStore((s) => s.setMobilePanel);
@@ -246,6 +345,9 @@ const PieceDock: React.FC<{ comp: Component; openPort?: Port }> = ({ comp, openP
         band="bg-sky-500/10"
         title={`${pieceName(comp.type)} ${size(nd)}${comp.parameters.schedule ? `, ${comp.parameters.schedule}` : ''}`}
         subtitle={comp.parameters.description || 'Pieza elegida'}
+        collapsed={collapsed}
+        canCollapse={canCollapse}
+        onToggleCollapse={onToggleCollapse}
       >
         {openPort && (
           <button
@@ -265,53 +367,55 @@ const PieceDock: React.FC<{ comp: Component; openPort?: Port }> = ({ comp, openP
         </button>
       </DockHeader>
 
-      <div className="overflow-y-auto overscroll-contain px-2 pt-2 pb-1 flex flex-col gap-2" style={{ touchAction: 'pan-y' }}>
-        {isPipe && (
-          <div className="flex items-center gap-1.5">
-            <label htmlFor="dock-largo" className="text-sm text-slate-400 w-12 shrink-0 pl-1">
-              Largo
-            </label>
-            <button type="button" aria-label="Restar 10 milímetros" onClick={() => applyLength(cut - 10)} className="w-12 h-12 rounded-xl bg-[#212631] border border-[#343c4c] text-xl font-bold text-slate-100 active:bg-[#2b3240]">
-              −
-            </button>
-            <input
-              id="dock-largo"
-              inputMode="numeric"
-              value={draft}
-              onChange={(e) => setDraft(e.target.value.replace(/[^0-9.]/g, ''))}
-              onBlur={() => applyLength(Number(draft))}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
-              }}
-              className="flex-1 min-w-0 h-12 rounded-xl bg-[#111419] border-2 border-[#0696d7] text-center text-xl font-bold text-slate-100 outline-none tabular-nums"
-            />
-            <button type="button" aria-label="Sumar 10 milímetros" onClick={() => applyLength(cut + 10)} className="w-12 h-12 rounded-xl bg-[#212631] border border-[#343c4c] text-xl font-bold text-slate-100 active:bg-[#2b3240]">
-              +
-            </button>
-            <span className="text-sm text-slate-400 pr-1">mm</span>
-          </div>
-        )}
+      {!collapsed && (
+        <div className="overflow-y-auto overscroll-contain px-2 pt-2 pb-1 flex flex-col gap-2" style={{ touchAction: 'pan-y' }}>
+          {isPipe && (
+            <div className="flex items-center gap-1.5">
+              <label htmlFor="dock-largo" className="text-sm text-slate-400 w-12 shrink-0 pl-1">
+                Largo
+              </label>
+              <button type="button" aria-label="Restar 10 milímetros" onClick={() => applyLength(cut - 10)} className="w-12 h-12 rounded-xl bg-[#212631] border border-[#343c4c] text-xl font-bold text-slate-100 active:bg-[#2b3240]">
+                −
+              </button>
+              <input
+                id="dock-largo"
+                inputMode="numeric"
+                value={draft}
+                onChange={(e) => setDraft(e.target.value.replace(/[^0-9.]/g, ''))}
+                onBlur={() => applyLength(Number(draft))}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                }}
+                className="flex-1 min-w-0 h-12 rounded-xl bg-[#111419] border-2 border-[#0696d7] text-center text-xl font-bold text-slate-100 outline-none tabular-nums"
+              />
+              <button type="button" aria-label="Sumar 10 milímetros" onClick={() => applyLength(cut + 10)} className="w-12 h-12 rounded-xl bg-[#212631] border border-[#343c4c] text-xl font-bold text-slate-100 active:bg-[#2b3240]">
+                +
+              </button>
+              <span className="text-sm text-slate-400 pr-1">mm</span>
+            </div>
+          )}
 
-        <div className="grid grid-cols-4 gap-1">
-          {actions.map(({ label, Icon, onClick, tone }) => (
-            <button
-              key={label}
-              type="button"
-              onClick={() => {
-                vibrate();
-                onClick();
-              }}
-              className={`min-h-[64px] rounded-xl flex flex-col items-center justify-center gap-1 text-xs font-semibold active:bg-[#2b3240] ${tone ?? 'text-slate-100'}`}
-            >
-              <Icon size={24} />
-              {label}
-            </button>
-          ))}
+          <div className="grid grid-cols-4 gap-1">
+            {actions.map(({ label, Icon, onClick, tone }) => (
+              <button
+                key={label}
+                type="button"
+                onClick={() => {
+                  vibrate();
+                  onClick();
+                }}
+                className={`min-h-[64px] rounded-xl flex flex-col items-center justify-center gap-1 text-xs font-semibold active:bg-[#2b3240] ${tone ?? 'text-slate-100'}`}
+              >
+                <Icon size={24} />
+                {label}
+              </button>
+            ))}
+          </div>
+          <p className="text-xs text-slate-400 px-1 pb-1">
+            {isPipe ? 'Derivar, purga y soporte van en el medio del caño. Para otro punto, mantené apretado el caño.' : 'Mantené apretada la pieza para ver todas las opciones.'}
+          </p>
         </div>
-        <p className="text-xs text-slate-400 px-1 pb-1">
-          {isPipe ? 'Derivar, purga y soporte van en el medio del caño. Para otro punto, mantené apretado el caño.' : 'Mantené apretada la pieza para ver todas las opciones.'}
-        </p>
-      </div>
+      )}
     </>
   );
 };

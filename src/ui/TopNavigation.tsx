@@ -1,9 +1,9 @@
-import React, { useRef } from 'react';
+import React, { useRef, useState } from 'react';
 import { usePipingStore } from '../store/usePipingStore';
 import { useUiConfigStore } from '../store/useUiConfigStore';
 import { useProjectStore } from '../store/useProjectStore';
-import { quickExportPcf } from './pcfExport';
-import { Redo2, Undo2 } from 'lucide-react';
+import { quickExportPcf, shareOrExportPcf } from './pcfExport';
+import { Redo2, SlidersHorizontal, Undo2 } from 'lucide-react';
 import { MobileSheet } from './MobileSheet';
 import {
   ActionIcon,
@@ -60,6 +60,8 @@ export const TopNavigation: React.FC = () => {
   const mobilePanel = useUiConfigStore((s) => s.mobilePanel);
   const setMobilePanel = useUiConfigStore((s) => s.setMobilePanel);
   const phone = usePhoneLayout();
+
+  const [quickBarOpen, setQuickBarOpen] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pcfInputRef = useRef<HTMLInputElement>(null);
@@ -118,8 +120,15 @@ export const TopNavigation: React.FC = () => {
       });
       return;
     }
+    const specName = usePipingStore.getState().specReader?.specName;
+    if (phone) {
+      void shareOrExportPcf(graph, specName).then((msg) => {
+        usePipingStore.setState({ statusMessage: msg });
+      });
+      return;
+    }
     // Un PCF por número de línea, como el PCF Export de Plant
-    usePipingStore.setState({ statusMessage: quickExportPcf(graph, usePipingStore.getState().specReader?.specName) });
+    usePipingStore.setState({ statusMessage: quickExportPcf(graph, specName) });
   };
 
   const formatNd = (d: number) => {
@@ -163,7 +172,7 @@ export const TopNavigation: React.FC = () => {
       {
         title: 'Entregar',
         items: [
-          { label: 'Exportar PCF', hint: 'Para PCF to Pipe', Icon: IconExportarPcf, onClick: handleQuickExportPcf, tone: 'text-sky-300', disabled: graph.components.size === 0 },
+          { label: 'Exportar PCF', hint: 'Compartir o guardar', Icon: IconExportarPcf, onClick: handleQuickExportPcf, tone: 'text-sky-300', disabled: graph.components.size === 0 },
           { label: 'Informe de campo', hint: noteCount ? `${noteCount} nota${noteCount > 1 ? 's' : ''}` : 'Cambios y fotos', Icon: IconInformeCampo, onClick: toggleField, tone: 'text-orange-300' },
           { label: 'Planos', hint: 'Isométricos y DXF', Icon: IconPlanosIso, onClick: toggleExport, tone: 'text-sky-300' },
           { label: 'Spools', hint: 'Taller y campo', Icon: IconSpools, onClick: toggleSpools, tone: 'text-amber-300' },
@@ -222,9 +231,77 @@ export const TopNavigation: React.FC = () => {
               <IconVistas size={22} />
             </button>
           </div>
-          <div className="h-[22px] px-2 bg-[#14171d] border-t border-[#282d38] flex items-center text-[11px] text-slate-300">
-            <span className="truncate">{statusMessage}</span>
+          <div className="h-[26px] px-2 bg-[#14171d] border-t border-[#282d38] flex items-center justify-between gap-2 text-[11px] text-slate-300">
+            <span className="truncate min-w-0">{statusMessage}</span>
+            <button
+              type="button"
+              aria-expanded={quickBarOpen}
+              aria-label="Cambio rápido de diámetro, spec y línea"
+              onClick={() => {
+                vibrate();
+                setQuickBarOpen((v) => !v);
+              }}
+              className={`shrink-0 h-[20px] px-2 rounded-full border flex items-center gap-1 text-[10px] font-bold tracking-tight transition-colors ${
+                quickBarOpen
+                  ? 'bg-[#0b3550] border-[#38bdf8] text-[#38bdf8]'
+                  : 'bg-[#1d222c] border-[#343b48] text-slate-200 active:bg-slate-700'
+              }`}
+            >
+              <SlidersHorizontal size={10} className="shrink-0" />
+              <span className="text-emerald-300">{formatNd(nominalDiameter)}</span>
+              <span className="text-slate-500">·</span>
+              <span className="text-sky-300">{specCode}</span>
+              <span className="text-slate-500">·</span>
+              <span className="text-amber-300 max-w-[72px] truncate">{lineNumber}</span>
+            </button>
           </div>
+          {quickBarOpen && (
+            <div
+              data-quick-bar
+              className="px-2 py-1.5 bg-[#12161d] border-t border-[#2d3442] grid grid-cols-3 gap-1.5"
+            >
+              <label className="flex flex-col gap-0.5 min-w-0">
+                <span className="text-[10px] uppercase tracking-wide text-slate-400 font-semibold">Diámetro</span>
+                <select
+                  aria-label="Diámetro nominal rápido"
+                  value={nominalDiameter}
+                  onChange={(e) => setNominalDiameter(Number(e.target.value))}
+                  className="h-9 rounded-lg bg-[#1a1f28] border border-[#343b48] px-1.5 text-xs font-bold text-emerald-300 outline-none"
+                >
+                  {availableDiameters.map((d) => (
+                    <option key={d} value={d} className="bg-[#161920] text-slate-100">
+                      {formatNd(d)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="flex flex-col gap-0.5 min-w-0">
+                <span className="text-[10px] uppercase tracking-wide text-slate-400 font-semibold">Spec</span>
+                <select
+                  aria-label="Spec rápida"
+                  value={specCode}
+                  onChange={(e) => loadBuiltInSpec(e.target.value)}
+                  className="h-9 rounded-lg bg-[#1a1f28] border border-[#343b48] px-1.5 text-xs font-bold text-sky-300 outline-none"
+                >
+                  {specOptions.map((sp) => (
+                    <option key={sp} value={sp} className="bg-[#161920] text-slate-100">
+                      {sp}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="flex flex-col gap-0.5 min-w-0">
+                <span className="text-[10px] uppercase tracking-wide text-slate-400 font-semibold">Línea</span>
+                <input
+                  type="text"
+                  aria-label="Número de línea rápido"
+                  value={lineNumber}
+                  onChange={(e) => setLineNumber(e.target.value)}
+                  className="h-9 rounded-lg bg-[#1a1f28] border border-[#343b48] px-2 text-xs font-bold text-amber-300 outline-none min-w-0"
+                />
+              </label>
+            </div>
+          )}
         </header>
 
         {mobilePanel === 'mas' && (

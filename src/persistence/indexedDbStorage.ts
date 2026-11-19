@@ -1,5 +1,6 @@
 import { SerializedGraphState } from '../types/piping';
 import { SpecCatalogData } from '../core/specs/catalogTypes';
+import { EquipmentRecord } from '../core/equipment/equipmentCatalog';
 
 /**
  * Todo lo que la app guarda en el teléfono (IndexedDB): proyectos de campo con su modelo, la
@@ -51,6 +52,7 @@ export interface ProjectRecord {
   baselineAt?: number;
   notes: FieldNote[];
   reference?: ReferenceRecord;
+  equipment?: EquipmentRecord[];
 }
 
 export interface ProjectMeta {

@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import * as THREE from 'three';
+import { Search, X } from 'lucide-react';
 import { usePipingStore } from '../store/usePipingStore';
 import { ComponentType, SpecFitting } from '../types/piping';
 import { PartCategory } from '../core/specs/catalogTypes';
@@ -8,6 +9,12 @@ import { formatNominal } from '../core/specs/units';
 import { PieceIconKind } from '../core/specs/paletteItems';
 import { PieceGrid } from './PieceGrid';
 import { PieceIcon } from './icons/PieceIcons';
+
+const normalizeQuery = (s: string) =>
+  s
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
 
 const CONFIDENCE_BADGE: Record<string, { label: string; cls: string; title: string }> = {
   verified: { label: '✓', cls: 'text-emerald-400', title: 'Ubicación de las bocas verificada contra Plant 3D' },
@@ -22,6 +29,7 @@ interface SectionProps {
   spec: SpecFitting | null | undefined;
   families: FamilyOption[];
   preferred?: string;
+  query?: string;
   detail?: React.ReactNode;
   onPickFamily: (familyId: string | null) => void;
   actions: React.ReactNode;
@@ -29,8 +37,18 @@ interface SectionProps {
 }
 
 /** Bloque de un tipo de pieza: pieza que se va a insertar + familias de la spec para elegir */
-const PartSection: React.FC<SectionProps> = ({ title, icon, spec, families, preferred, detail, onPickFamily, actions, children }) => {
+const PartSection: React.FC<SectionProps> = ({ title, icon, spec, families, preferred, query = '', detail, onPickFamily, actions, children }) => {
+  const q = normalizeQuery(query.trim());
+  const matchesFamily = (f: FamilyOption) =>
+    !q ||
+    normalizeQuery(`${f.familyDesc} ${f.skey ?? ''} ${f.endTypes.join(' ')} ${f.pressureClass ?? ''}`).includes(q);
+  const filteredFamilies = q ? families.filter(matchesFamily) : families;
+  const headerMatches =
+    !q || normalizeQuery(`${title} ${spec?.shortDescription ?? ''} ${spec?.skey ?? ''} ${spec?.itemCode ?? ''}`).includes(q);
+  if (q && !headerMatches && filteredFamilies.length === 0) return null;
+
   const badge = spec?.geometryConfidence ? CONFIDENCE_BADGE[spec.geometryConfidence] : undefined;
+  const shownFamilies = q && filteredFamilies.length > 0 ? filteredFamilies : families;
   return (
     <div className="p-3 bg-[#252830] rounded-lg border border-[#3a3f4d] space-y-2">
       <div className="flex items-start justify-between gap-3">
@@ -59,7 +77,7 @@ const PartSection: React.FC<SectionProps> = ({ title, icon, spec, families, pref
         </div>
         <div className="flex flex-col gap-1.5 shrink-0">{actions}</div>
       </div>
-      {families.length > 1 && (
+      {shownFamilies.length > 1 && (
         <div className="flex gap-1 overflow-x-auto no-scrollbar pt-1 border-t border-slate-700/60">
           <button
             onClick={() => onPickFamily(null)}
@@ -70,7 +88,7 @@ const PartSection: React.FC<SectionProps> = ({ title, icon, spec, families, pref
           >
             Auto (spec)
           </button>
-          {families.map((f) => (
+          {shownFamilies.map((f) => (
             <button
               key={f.familyId}
               onClick={() => onPickFamily(f.familyId)}
@@ -107,6 +125,7 @@ export const ToolPaletteModal: React.FC = () => {
 
   const [selectedBranchAxis, setSelectedBranchAxis] = useState<'UP' | 'DOWN' | 'NORTH' | 'SOUTH'>('UP');
   const [selectedReducerTarget, setSelectedReducerTarget] = useState<number | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
 
   // El puerto activo define con qué extremo se conecta la próxima pieza
   const activePort = selectedPortId ? graph.ports.get(selectedPortId) : undefined;
@@ -233,11 +252,37 @@ export const ToolPaletteModal: React.FC = () => {
           ))}
         </div>
 
+        <div className="px-4 py-2 bg-[#16181e] border-b border-[#3a3f4d] flex items-center gap-2">
+          <div className="relative flex-1 flex items-center">
+            <Search size={14} className="absolute left-2.5 text-slate-400 pointer-events-none" />
+            <input
+              type="search"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Buscar pieza, material, norma, schedule (ej. WN, RF, 300, SCH40)..."
+              aria-label="Buscar en el catálogo de la spec"
+              className="w-full h-9 pl-8 pr-8 rounded-lg bg-[#111419] border border-[#343b48] text-xs text-slate-100 placeholder:text-slate-500 outline-none focus:border-[#0696d7]"
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => setSearchQuery('')}
+                aria-label="Limpiar búsqueda"
+                className="absolute right-1.5 w-6 h-6 rounded flex items-center justify-center text-slate-400 hover:text-white"
+              >
+                <X size={13} />
+              </button>
+            )}
+          </div>
+        </div>
+
         {data && (
           <div className="flex-1 overflow-y-auto p-3 space-y-2.5 no-scrollbar">
-            <div className="p-3 bg-[#252830] rounded-lg border border-[#3a3f4d]">
-              <PieceGrid variant="sheet" onInserted={toggleToolPalette} showRecents={false} />
-            </div>
+            {!searchQuery.trim() && (
+              <div className="p-3 bg-[#252830] rounded-lg border border-[#3a3f4d]">
+                <PieceGrid variant="sheet" onInserted={toggleToolPalette} showRecents={false} />
+              </div>
+            )}
             <h3 className="pt-1 text-[10px] uppercase tracking-wide font-bold text-slate-400">
               Familia que se usa en cada tipo (queda fijada para la spec)
             </h3>
@@ -249,6 +294,7 @@ export const ToolPaletteModal: React.FC = () => {
               families={data.families.PIPE}
               preferred={preferredFamilies.PIPE}
               onPickFamily={pick('PIPE')}
+              query={searchQuery}
               detail={data.pipe && `OD ${data.pipe.outerDiameter.toFixed(1)} • esp. ${data.pipe.wallThickness.toFixed(2)} mm • largo ${numpadValue || '1000'} mm`}
               actions={
                 <button disabled={!data.pipe} onClick={() => handleInsert('PIPE')} className={`${btn} bg-[#0696d7]`}>
@@ -265,6 +311,7 @@ export const ToolPaletteModal: React.FC = () => {
               families={data.families.ELBOW}
               preferred={preferredFamilies.ELBOW}
               onPickFamily={pick('ELBOW')}
+              query={searchQuery}
               detail={
                 <>
                   {data.elbow90 && `90°: centro a puerto ${data.elbow90.takeOff?.toFixed(1)} mm`}
@@ -292,6 +339,7 @@ export const ToolPaletteModal: React.FC = () => {
               families={data.families.TEE}
               preferred={preferredFamilies.TEE}
               onPickFamily={pick('TEE')}
+              query={searchQuery}
               detail={data.tee && `recorrido ${data.tee.runTakeOff?.toFixed(1)} • ramal ${data.tee.branchTakeOff?.toFixed(1)} mm`}
               actions={
                 <>
@@ -338,6 +386,7 @@ export const ToolPaletteModal: React.FC = () => {
               families={data.families.FLANGE}
               preferred={preferredFamilies.FLANGE}
               onPickFamily={pick('FLANGE')}
+              query={searchQuery}
               detail={data.flange && `cara a puerto del caño ${data.flange.faceToFace?.toFixed(3)} mm • se orienta sola según el extremo`}
               actions={
                 <button disabled={!data.flange} onClick={() => handleInsert('FLANGE')} className={`${btn} bg-purple-600`}>
@@ -354,6 +403,7 @@ export const ToolPaletteModal: React.FC = () => {
               families={data.families.VALVE}
               preferred={preferredFamilies.VALVE}
               onPickFamily={pick('VALVE')}
+              query={searchQuery}
               detail={
                 data.valve &&
                 `cara a cara ${data.valve.faceToFace?.toFixed(1)} mm • extremos ${data.valve.plantEndTypes?.join('/') ?? data.valve.endType}`
@@ -373,6 +423,7 @@ export const ToolPaletteModal: React.FC = () => {
               families={data.families.REDUCER}
               preferred={preferredFamilies.REDUCER}
               onPickFamily={pick('REDUCER')}
+              query={searchQuery}
               detail={reducerSpec && `largo ${reducerSpec.faceToFace?.toFixed(1)} mm • extremo chico OD ${reducerSpec.reducedOuterDiameter?.toFixed(2)} mm`}
               actions={
                 <button
@@ -410,6 +461,7 @@ export const ToolPaletteModal: React.FC = () => {
               families={data.families.CAP}
               preferred={preferredFamilies.CAP}
               onPickFamily={pick('CAP')}
+              query={searchQuery}
               detail={data.cap && `altura desde el puerto ${data.cap.faceToFace?.toFixed(1)} mm`}
               actions={
                 <button disabled={!data.cap} onClick={() => handleInsert('CAP')} className={`${btn} bg-slate-600`}>

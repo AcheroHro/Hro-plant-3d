@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
-import { usePipingStore, isolatedIds } from '../store/usePipingStore';
+import { usePipingStore, isolatedIds, lineOf } from '../store/usePipingStore';
 import { ViewCube } from './ViewCube';
 import { usePhoneLayout } from '../ui/useIsPhone';
 import { buildComponentObject } from './buildComponentMesh';
@@ -9,17 +9,40 @@ import { setPieceHidden, SUPPORT_KEY, visibleBounds } from './meshBatches';
 import { IncrementalBatches } from './incrementalBatches';
 import { buildSupportObject, createModelMaterials, modelPieces, ModelMaterials } from './modelPieces';
 import { computeSpools } from '../core/spools/spoolEngine';
-import { SPOOL_COLORS, ERECTION_COLOR, FIELD_COLORS, FIELD_UNCHANGED_COLOR } from './spoolColors';
+import { SPOOL_COLORS, ERECTION_COLOR, FIELD_COLORS, FIELD_UNCHANGED_COLOR, colorForLine } from './spoolColors';
 import { useProjectStore } from '../store/useProjectStore';
 import { diffStates } from '../core/field/changeLog';
 import { findScreenMagneticSnap } from './snapping/magneticSnap';
 import { buildModelLabels, ModelLabel } from './modelLabels';
 import { useUiConfigStore } from '../store/useUiConfigStore';
 import { useReferenceStore } from '../store/useReferenceStore';
+import { useEquipmentStore } from '../store/useEquipmentStore';
+import { buildEquipmentGroup } from './equipmentMesh';
+import { buildPlantCompassGroup } from './plantCompass';
+import { buildInsulationGroup } from './insulationMesh';
 import { supportDimensions } from '../core/graph/supportDimensions';
 
 // Configurar orientación industrial estándar Z-Up globalmente
 THREE.Object3D.DEFAULT_UP.set(0, 0, 1);
+
+const FOV_DEG = 45;
+const TAN_HALF_FOV = Math.tan(THREE.MathUtils.degToRad(FOV_DEG / 2));
+
+function syncOrthoFrustum(ortho: THREE.OrthographicCamera, distance: number, aspect: number): void {
+  const halfH = Math.max(50, distance * TAN_HALF_FOV);
+  const halfW = halfH * Math.max(0.2, aspect);
+  ortho.left = -halfW;
+  ortho.right = halfW;
+  ortho.top = halfH;
+  ortho.bottom = -halfH;
+  ortho.updateProjectionMatrix();
+}
+
+function unitsPerPixelFor(cam: THREE.PerspectiveCamera | THREE.OrthographicCamera, pos: THREE.Vector3, viewH: number): number {
+  const h = Math.max(1, viewH);
+  if (cam instanceof THREE.OrthographicCamera) return (cam.top - cam.bottom) / h;
+  return (2 * cam.position.distanceTo(pos) * TAN_HALF_FOV) / h;
+}
 
 export const CanvasViewer: React.FC = () => {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -51,9 +74,17 @@ export const CanvasViewer: React.FC = () => {
   const multiSelect = usePipingStore((s) => s.multiSelect);
   const multiMode = usePipingStore((s) => s.multiMode);
   const isolation = usePipingStore((s) => s.isolation);
+  const hiddenLines = usePipingStore((s) => s.hiddenLines);
   const measureActive = usePipingStore((s) => s.measureActive);
   const measurePoints = usePipingStore((s) => s.measurePoints);
   const sectionBox = usePipingStore((s) => s.sectionBox);
+  const cameraProjection = useUiConfigStore((s) => s.cameraProjection);
+  const toggleCameraProjection = useUiConfigStore((s) => s.toggleCameraProjection);
+  const visualStyle = useUiConfigStore((s) => s.visualStyle);
+  const colorByLine = useUiConfigStore((s) => s.colorByLine);
+  const showPlantCompass = useUiConfigStore((s) => s.showPlantCompass);
+  const showInsulation = useUiConfigStore((s) => s.showInsulation);
+  const insulationThicknessMm = useUiConfigStore((s) => s.insulationThicknessMm);
   const phone = usePhoneLayout();
   // Estirar un caño arrastrando su grip: largo provisorio hasta soltar
   const [stretch, setStretch] = useState<{ compId: string; anchor: 'start' | 'end'; length: number } | null>(null);
@@ -67,23 +98,30 @@ export const CanvasViewer: React.FC = () => {
   const labels = useMemo<ModelLabel[]>(
     () =>
       showLabels
-        ? buildModelLabels(graph, isolatedIds(graph, isolation)).filter((l) => !(l.kind === 'cota' && l.componentId === selectedComponentId))
+        ? buildModelLabels(graph, isolatedIds(graph, isolation, hiddenLines)).filter((l) => !(l.kind === 'cota' && l.componentId === selectedComponentId))
         : [],
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [showLabels, graph, version, isolation, selectedComponentId]
+    [showLabels, graph, version, isolation, hiddenLines, selectedComponentId]
   );
   const labelsDataRef = useRef<ModelLabel[]>([]);
   const labelElsRef = useRef<(HTMLElement | null)[]>([]);
   labelsDataRef.current = labels;
 
-  // Referencia de obra (DXF de fondo)
+  // Referencia de obra (DXF de fondo) y equipos de proceso con boquillas
   const reference = useReferenceStore((s) => s.reference);
   const refGroupRef = useRef<THREE.LineSegments | null>(null);
+  const equipmentItems = useEquipmentStore((s) => s.items);
+  const equipmentGroupRef = useRef<THREE.Group | null>(null);
 
   // Referencias para la escena Three.js
   const sceneRef = useRef<THREE.Scene | null>(null);
-  const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
+  const perspCameraRef = useRef<THREE.PerspectiveCamera | null>(null);
+  const orthoCameraRef = useRef<THREE.OrthographicCamera | null>(null);
+  const cameraRef = useRef<THREE.PerspectiveCamera | THREE.OrthographicCamera | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
+  const gridRef = useRef<THREE.GridHelper | null>(null);
+  const lightsRef = useRef<{ ambient: THREE.AmbientLight; dir1: THREE.DirectionalLight; dir2: THREE.DirectionalLight } | null>(null);
+  const requestRenderRef = useRef<() => void>(() => {});
   const pipeGroupRef = useRef<THREE.Group | null>(null);
   /** Mallas fusionadas del modelo, para apagar y prender piezas al elegirlas */
   const batchesRef = useRef<THREE.Mesh[]>([]);
@@ -135,15 +173,24 @@ export const CanvasViewer: React.FC = () => {
     const width = container.clientWidth || window.innerWidth;
     const height = container.clientHeight || window.innerHeight;
 
-    // 1. Inicializar Escena Three.js (Fondo oscuro CAD Plant 3D: #11161d)
+    // 1. Inicializar Escena Three.js (Fondo oscuro CAD Plant 3D: #11161d o claro en modo Exterior)
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x11161d);
+    const initialStyle = useUiConfigStore.getState().visualStyle;
+    scene.background = new THREE.Color(initialStyle === 'outdoor' ? 0xeef2f6 : 0x11161d);
     sceneRef.current = scene;
 
-    // 2. Inicializar Cámara Perspectiva con Z-Up
-    const camera = new THREE.PerspectiveCamera(45, width / height, 10, 80000);
-    camera.up.set(0, 0, 1);
-    cameraRef.current = camera;
+    // 2. Inicializar Cámaras Perspectiva y Ortográfica con Z-Up
+    const aspect = width / Math.max(1, height);
+    const perspCamera = new THREE.PerspectiveCamera(FOV_DEG, aspect, 10, 80000);
+    perspCamera.up.set(0, 0, 1);
+    perspCameraRef.current = perspCamera;
+
+    const orthoCamera = new THREE.OrthographicCamera(-1000, 1000, 1000, -1000, -50000, 100000);
+    orthoCamera.up.set(0, 0, 1);
+    syncOrthoFrustum(orthoCamera, cameraDistanceRef.current, aspect);
+    orthoCameraRef.current = orthoCamera;
+
+    cameraRef.current = useUiConfigStore.getState().cameraProjection === 'orthographic' ? orthoCamera : perspCamera;
 
     // 3. Inicializar Renderizador WebGL
     const renderer = new THREE.WebGLRenderer({
@@ -156,25 +203,32 @@ export const CanvasViewer: React.FC = () => {
     rendererRef.current = renderer;
 
     // 4. Iluminación Técnica Industrial (Shaded with Edges look)
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.85);
+    const ambientLight = new THREE.AmbientLight(0xffffff, initialStyle === 'outdoor' ? 1.25 : 0.85);
     scene.add(ambientLight);
 
-    const dirLight1 = new THREE.DirectionalLight(0xffffff, 1.35);
+    const dirLight1 = new THREE.DirectionalLight(0xffffff, initialStyle === 'outdoor' ? 1.55 : 1.35);
     dirLight1.position.set(2500, 3500, 4500);
     scene.add(dirLight1);
 
-    const dirLight2 = new THREE.DirectionalLight(0x38bdf8, 0.55);
+    const dirLight2 = new THREE.DirectionalLight(0x38bdf8, initialStyle === 'outdoor' ? 0.35 : 0.55);
     dirLight2.position.set(-2500, -2000, 1500);
     scene.add(dirLight2);
 
     const dirLight3 = new THREE.DirectionalLight(0xffffff, 0.4);
     dirLight3.position.set(0, 2000, -3000);
     scene.add(dirLight3);
+    lightsRef.current = { ambient: ambientLight, dir1: dirLight1, dir2: dirLight2 };
 
     // 5. Cuadrícula de Referencia CAD (Plano XY Z=0)
-    const grid = new THREE.GridHelper(6000, 60, 0x334155, 0x1e293b);
+    const grid = new THREE.GridHelper(
+      6000,
+      60,
+      initialStyle === 'outdoor' ? 0x94a3b8 : 0x334155,
+      initialStyle === 'outdoor' ? 0xcbd5e1 : 0x1e293b
+    );
     grid.rotation.x = Math.PI / 2;
     scene.add(grid);
+    gridRef.current = grid;
 
     // Ejes WCS en el origen (X=Rojo, Y=Verde, Z=Azul)
     const axes = new THREE.AxesHelper(350);
@@ -192,10 +246,7 @@ export const CanvasViewer: React.FC = () => {
     portsGroupRef.current = portsGroup;
     cursorGroupRef.current = cursorGroup;
 
-    // 7. Actualizar posición inicial de la cámara
-    updateCameraPosition();
-
-    // 8. Manejo de pérdida de contexto WebGL
+    // 7. Manejo de pérdida de contexto WebGL
     const handleContextLost = (e: Event) => {
       e.preventDefault();
       console.warn('Achero Plant 3D: WebGLContextLost detectado.');
@@ -204,31 +255,50 @@ export const CanvasViewer: React.FC = () => {
     const handleContextRestored = () => {
       console.info('Achero Plant 3D: WebGLContextRestored. Reconstruyendo escena.');
       usePipingStore.getState().initialize();
+      requestRender();
     };
 
     canvas.addEventListener('webglcontextlost', handleContextLost, false);
     canvas.addEventListener('webglcontextrestored', handleContextRestored, false);
 
-    // 9. Bucle de animación (60 FPS)
-    let animationFrameId: number;
-    const animate = () => {
-      animationFrameId = requestAnimationFrame(animate);
+    // 8. Renderizado bajo demanda (ahorra batería y GPU en móvil cuando la escena está quieta)
+    let animationFrameId = 0;
+    let frameScheduled = false;
+    const renderFrame = () => {
+      frameScheduled = false;
+      animationFrameId = 0;
+      const camera = cameraRef.current;
+      if (!camera) return;
 
-      // Snapping magnético continuo en pantalla con el grafo actual
-      if (cameraRef.current && containerRef.current) {
-        const w = containerRef.current.clientWidth;
-        const h = containerRef.current.clientHeight;
+      // Vista pedida desde el cubo: la cámara gira hasta ahí por el camino corto
+      const anim = viewAnimRef.current;
+      if (anim) {
+        const da = Math.atan2(Math.sin(anim.azimuth - cameraAzimuthRef.current), Math.cos(anim.azimuth - cameraAzimuthRef.current));
+        const dp = anim.polar - cameraPolarRef.current;
+        if (Math.abs(da) < 0.004 && Math.abs(dp) < 0.004) {
+          cameraAzimuthRef.current = anim.azimuth;
+          cameraPolarRef.current = anim.polar;
+          viewAnimRef.current = null;
+        } else {
+          cameraAzimuthRef.current += da * 0.22;
+          cameraPolarRef.current += dp * 0.22;
+        }
+        updateCameraPosition(false);
+      }
+
+      // Snapping magnético en pantalla con el grafo actual
+      const viewW = containerRef.current?.clientWidth || 1;
+      const viewH = containerRef.current?.clientHeight || 1;
+      {
         const currentGraph = usePipingStore.getState().graph;
         const openPorts = currentGraph.getOpenPorts();
-        const snap = findScreenMagneticSnap(openPorts, cameraRef.current, w, h, 35);
-        setSnappedPortId(snap.isSnapped && snap.snappedPort ? snap.snappedPort.id : null);
+        const snap = findScreenMagneticSnap(openPorts, camera, viewW, viewH, 35);
+        const nextSnap = snap.isSnapped && snap.snappedPort ? snap.snappedPort.id : null;
+        if (nextSnap !== usePipingStore.getState().snappedPortId) setSnappedPortId(nextSnap);
       }
 
       // Compás y manija con tamaño constante en pantalla; cota de largo pegada a la manija
-      const viewH = containerRef.current?.clientHeight || 1;
-      const viewW = containerRef.current?.clientWidth || 1;
-      const unitsPerPixel = (pos: THREE.Vector3) =>
-        (2 * camera.position.distanceTo(pos) * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2))) / viewH;
+      const unitsPerPixel = (pos: THREE.Vector3) => unitsPerPixelFor(camera, pos, viewH);
       const gizmo = gizmoRef.current;
       if (gizmo) gizmo.scale.setScalar(unitsPerPixel(gizmo.position));
       const handle = handleRef.current;
@@ -271,22 +341,6 @@ export const CanvasViewer: React.FC = () => {
           el.style.transform = `translate(${Math.round(Math.max(4, Math.min(x, viewW - 60)))}px, ${Math.round(Math.max(y, 20))}px) translate(-50%, -50%)`;
           el.style.visibility = 'visible';
         } else el.style.visibility = 'hidden';
-      }
-
-      // Vista pedida desde el cubo: la cámara gira hasta ahí por el camino corto
-      const anim = viewAnimRef.current;
-      if (anim) {
-        const da = Math.atan2(Math.sin(anim.azimuth - cameraAzimuthRef.current), Math.cos(anim.azimuth - cameraAzimuthRef.current));
-        const dp = anim.polar - cameraPolarRef.current;
-        if (Math.abs(da) < 0.004 && Math.abs(dp) < 0.004) {
-          cameraAzimuthRef.current = anim.azimuth;
-          cameraPolarRef.current = anim.polar;
-          viewAnimRef.current = null;
-        } else {
-          cameraAzimuthRef.current += da * 0.22;
-          cameraPolarRef.current += dp * 0.22;
-        }
-        updateCameraPosition();
       }
 
       // El cubo de vistas copia el giro de la cámara (mundo Z arriba -> pantalla CSS con Y hacia abajo)
@@ -333,22 +387,42 @@ export const CanvasViewer: React.FC = () => {
       }
 
       renderer.render(scene, camera);
+
+      // Solo sigue pidiendo cuadros mientras haya una animación de cámara en curso
+      if (viewAnimRef.current) requestRender();
     };
-    animate();
+
+    const requestRender = () => {
+      if (frameScheduled) return;
+      frameScheduled = true;
+      animationFrameId = requestAnimationFrame(renderFrame);
+    };
+    requestRenderRef.current = requestRender;
+
+    // 9. Actualizar posición inicial de la cámara y dibujar el primer cuadro
+    updateCameraPosition();
 
     // 10. Redimensionado
     const handleResize = () => {
-      if (!containerRef.current || !rendererRef.current || !cameraRef.current) return;
+      if (!containerRef.current || !rendererRef.current) return;
       const w = containerRef.current.clientWidth;
-      const h = containerRef.current.clientHeight;
-      cameraRef.current.aspect = w / h;
-      cameraRef.current.updateProjectionMatrix();
+      const h = Math.max(1, containerRef.current.clientHeight);
+      const nextAspect = w / h;
+      if (perspCameraRef.current) {
+        perspCameraRef.current.aspect = nextAspect;
+        perspCameraRef.current.updateProjectionMatrix();
+      }
+      if (orthoCameraRef.current) {
+        syncOrthoFrustum(orthoCameraRef.current, cameraDistanceRef.current, nextAspect);
+      }
       rendererRef.current.setSize(w, h);
+      requestRender();
     };
     window.addEventListener('resize', handleResize);
 
     return () => {
-      cancelAnimationFrame(animationFrameId);
+      if (animationFrameId) cancelAnimationFrame(animationFrameId);
+      requestRenderRef.current = () => {};
       window.removeEventListener('resize', handleResize);
       canvas.removeEventListener('webglcontextlost', handleContextLost);
       canvas.removeEventListener('webglcontextrestored', handleContextRestored);
@@ -357,10 +431,14 @@ export const CanvasViewer: React.FC = () => {
     };
   }, []);
 
-  // Actualiza la posición de la cámara según los ángulos polares y la distancia
-  const updateCameraPosition = () => {
-    if (!cameraRef.current) return;
-    const cam = cameraRef.current;
+  const viewportAspect = () => {
+    const el = containerRef.current;
+    if (!el || !el.clientHeight) return 1;
+    return el.clientWidth / el.clientHeight;
+  };
+
+  // Actualiza la posición de ambas cámaras según los ángulos polares y la distancia
+  const updateCameraPosition = (schedule = true) => {
     const target = cameraTargetRef.current;
     const r = cameraDistanceRef.current;
     const polar = cameraPolarRef.current;
@@ -371,16 +449,62 @@ export const CanvasViewer: React.FC = () => {
     const y = target.y + r * Math.sin(polar) * Math.cos(azimuth);
     const z = target.z + r * Math.cos(polar);
 
-    cam.position.set(x, y, z);
-    cam.lookAt(target);
+    if (perspCameraRef.current) {
+      perspCameraRef.current.position.set(x, y, z);
+      perspCameraRef.current.lookAt(target);
+      perspCameraRef.current.updateMatrixWorld();
+    }
+    if (orthoCameraRef.current) {
+      orthoCameraRef.current.position.set(x, y, z);
+      orthoCameraRef.current.lookAt(target);
+      syncOrthoFrustum(orthoCameraRef.current, r, viewportAspect());
+      orthoCameraRef.current.updateMatrixWorld();
+    }
+    if (schedule) requestRenderRef.current();
   };
+
+  // Cambiar entre cámara Perspectiva y Ortográfica al instante
+  useEffect(() => {
+    cameraRef.current = cameraProjection === 'orthographic' ? orthoCameraRef.current : perspCameraRef.current;
+    updateCameraPosition();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cameraProjection]);
+
+  // Aplicar estilo visual CAD (fondo, grilla, iluminación y materiales)
+  useEffect(() => {
+    const scene = sceneRef.current;
+    if (!scene) return;
+    const outdoor = visualStyle === 'outdoor';
+    scene.background = new THREE.Color(outdoor ? 0xeef2f6 : 0x11161d);
+    const lights = lightsRef.current;
+    if (lights) {
+      lights.ambient.intensity = outdoor ? 1.25 : 0.85;
+      lights.dir1.intensity = outdoor ? 1.55 : 1.35;
+      lights.dir2.intensity = outdoor ? 0.35 : 0.55;
+    }
+    if (gridRef.current) {
+      scene.remove(gridRef.current);
+      gridRef.current.geometry.dispose();
+      const mats = Array.isArray(gridRef.current.material) ? gridRef.current.material : [gridRef.current.material];
+      mats.forEach((m) => m.dispose());
+      const nextGrid = new THREE.GridHelper(6000, 60, outdoor ? 0x94a3b8 : 0x334155, outdoor ? 0xcbd5e1 : 0x1e293b);
+      nextGrid.rotation.x = Math.PI / 2;
+      scene.add(nextGrid);
+      gridRef.current = nextGrid;
+    }
+    modelMaterialsRef.current?.setVisualStyle(visualStyle);
+    requestRenderRef.current();
+  }, [visualStyle]);
 
   // Función Encuadrar Todo (Zoom Extents)
   const executeFrameAll = () => {
     if (!cameraRef.current || !pipeGroupRef.current) return;
     // Solo lo visible: en la malla fusionada una pieza borrada queda apagada hasta el reagrupado
     const box = visibleBounds(pipeGroupRef.current);
-    // Sin cañerías todavía: se encuadra la referencia de obra, si hay una a la vista
+    // Sin cañerías todavía: se encuadran los equipos o la referencia de obra, si hay alguno a la vista
+    if (box.isEmpty() && equipmentGroupRef.current && equipmentGroupRef.current.children.length > 0) {
+      box.setFromObject(equipmentGroupRef.current);
+    }
     if (box.isEmpty() && refGroupRef.current?.visible) box.setFromObject(refGroupRef.current);
     if (box.isEmpty()) {
       // Modelo vacío: el primer tramo sale del origen, que queda al centro
@@ -394,7 +518,7 @@ export const CanvasViewer: React.FC = () => {
       const maxDim = Math.max(size.x, size.y, size.z, 350);
       cameraTargetRef.current.copy(center);
       // En pantallas angostas (teléfono vertical) hace falta alejarse más para que entre a lo ancho
-      cameraDistanceRef.current = (maxDim * 2.1) / Math.min(1, cameraRef.current.aspect * 1.05);
+      cameraDistanceRef.current = (maxDim * 2.1) / Math.min(1, viewportAspect() * 1.05);
     }
     updateCameraPosition();
   };
@@ -424,9 +548,8 @@ export const CanvasViewer: React.FC = () => {
         // Al centro queda el tramo que se está por trazar, con su manija de largo a la vista
         const len = Math.min(parseFloat(usePipingStore.getState().numpadValue) || 500, 4000);
         cameraTargetRef.current.copy(port.position).addScaledVector(activeDirection, len / 2);
-        const cam = cameraRef.current;
-        if (cam && !dragLengthRef.current) {
-          const fit = (len * 1.35) / (2 * Math.tan(THREE.MathUtils.degToRad(cam.fov / 2)) * Math.min(cam.aspect, 0.62));
+        if (cameraRef.current && !dragLengthRef.current) {
+          const fit = (len * 1.35) / (2 * TAN_HALF_FOV * Math.min(viewportAspect(), 0.62));
           if (fit > cameraDistanceRef.current) cameraDistanceRef.current = Math.min(fit, 12000);
         }
         updateCameraPosition();
@@ -437,14 +560,13 @@ export const CanvasViewer: React.FC = () => {
   // Al proponer un recorrido de conexión, se encuadra entero para poder compararlo con los otros
   useEffect(() => {
     const route = connectRoutes[connectIndex];
-    const cam = cameraRef.current;
-    if (!route || !cam) return;
+    if (!route || !cameraRef.current) return;
     const box = new THREE.Box3().setFromPoints(route.points);
     const size = box.getSize(new THREE.Vector3());
     box.getCenter(cameraTargetRef.current);
     const span = Math.max(size.length(), 400);
     cameraDistanceRef.current = THREE.MathUtils.clamp(
-      (span * 1.25) / (2 * Math.tan(THREE.MathUtils.degToRad(cam.fov / 2)) * Math.min(cam.aspect, 0.62)),
+      (span * 1.25) / (2 * TAN_HALF_FOV * Math.min(viewportAspect(), 0.62)),
       150,
       35000
     );
@@ -456,7 +578,10 @@ export const CanvasViewer: React.FC = () => {
   useEffect(() => {
     const pipeGroup = pipeGroupRef.current;
     if (!pipeGroup) return;
-    if (!modelMaterialsRef.current) modelMaterialsRef.current = createModelMaterials();
+    if (!modelMaterialsRef.current) {
+      modelMaterialsRef.current = createModelMaterials();
+      modelMaterialsRef.current.setVisualStyle(useUiConfigStore.getState().visualStyle);
+    }
     if (!incrementalRef.current) incrementalRef.current = new IncrementalBatches();
     const materials = modelMaterialsRef.current;
 
@@ -474,17 +599,28 @@ export const CanvasViewer: React.FC = () => {
         }
       }
     }
+    // Vista por color de línea (estilo Plant 3D)
+    const sortedLines = colorByLine
+      ? Array.from(new Set(Array.from(graph.components.values(), (c) => lineOf(graph, c)).filter(Boolean))).sort()
+      : [];
     const colorOf = (compId: string): number | null => {
       if (fieldView && fieldBaseline) return fieldColor.get(compId) ?? FIELD_UNCHANGED_COLOR;
-      if (!spoolResult) return null;
-      const sid = spoolResult.spoolOf.get(compId);
-      return sid ? SPOOL_COLORS[(spoolColorIndex.get(sid) ?? 0) % SPOOL_COLORS.length] : ERECTION_COLOR;
+      if (spoolResult) {
+        const sid = spoolResult.spoolOf.get(compId);
+        return sid ? SPOOL_COLORS[(spoolColorIndex.get(sid) ?? 0) % SPOOL_COLORS.length] : ERECTION_COLOR;
+      }
+      if (colorByLine) {
+        const comp = graph.components.get(compId);
+        const line = comp ? lineOf(graph, comp) : '';
+        return line ? colorForLine(line, sortedLines) : null;
+      }
+      return null;
     };
 
     const specs = modelPieces(graph, {
       materials,
-      // Con una línea aislada, lo demás no se dibuja (ni se puede tocar)
-      visibleIds: isolatedIds(graph, isolation),
+      // Con una línea aislada u oculta, lo demás no se dibuja (ni se puede tocar)
+      visibleIds: isolatedIds(graph, isolation, hiddenLines),
       colliding: collidingComponentIds,
       colorOf
     });
@@ -493,7 +629,8 @@ export const CanvasViewer: React.FC = () => {
     pipeGroup.clear();
     for (const obj of [...batches, ...rest]) pipeGroup.add(obj);
     batchesRef.current = batches;
-  }, [graph, version, collidingComponentIds, spoolView, fieldView, fieldBaseline, isolation]);
+    requestRenderRef.current();
+  }, [graph, version, collidingComponentIds, spoolView, fieldView, fieldBaseline, isolation, hiddenLines, colorByLine]);
 
   // Al cerrar el visor se sueltan las mallas guardadas y los materiales del modelo
   useEffect(
@@ -512,7 +649,7 @@ export const CanvasViewer: React.FC = () => {
     const pipeGroup = pipeGroupRef.current;
     if (!pipeGroup) return;
     const batches = batchesRef.current;
-    const visibleIds = isolatedIds(graph, isolation);
+    const visibleIds = isolatedIds(graph, isolation, hiddenLines);
 
     const selectedMaterial = new THREE.MeshStandardMaterial({
       color: 0x00f0ff,
@@ -588,14 +725,16 @@ export const CanvasViewer: React.FC = () => {
       supDimPosRef.current = [null, null];
     }
     pipeGroup.add(overlay);
+    requestRenderRef.current();
 
     return () => {
       pipeGroup.remove(overlay);
       disposeObject(overlay);
       // Solo se vuelve a prender lo que apagó este efecto (no lo apagado por una edición)
       for (const [changed, id] of hidden) setPieceHidden(changed, id, false);
+      requestRenderRef.current();
     };
-  }, [graph, version, collidingComponentIds, spoolView, fieldView, fieldBaseline, isolation, selectedComponentId, selectedSupportId, multiSelect, multiMode]);
+  }, [graph, version, collidingComponentIds, spoolView, fieldView, fieldBaseline, isolation, hiddenLines, selectedComponentId, selectedSupportId, multiSelect, multiMode]);
 
   // Bocas libres: anillo, esfera para tocar y flecha. Dependen de la boca activa, no de la pieza elegida
   useEffect(() => {
@@ -603,7 +742,7 @@ export const CanvasViewer: React.FC = () => {
     if (!portsGroup) return;
     disposeObject(portsGroup);
     while (portsGroup.children.length > 0) portsGroup.remove(portsGroup.children[0]);
-    const visibleIds = isolatedIds(graph, isolation);
+    const visibleIds = isolatedIds(graph, isolation, hiddenLines);
 
     // 2. Construir Grips "+" estilo AutoCAD Plant 3D para TODOS los puertos abiertos (fáciles de tocar en móvil/PC)
     const openPorts = graph.getOpenPorts();
@@ -659,7 +798,8 @@ export const CanvasViewer: React.FC = () => {
       );
       portsGroup.add(stubArrow);
     }
-  }, [graph, version, selectedPortId, isolation]);
+    requestRenderRef.current();
+  }, [graph, version, selectedPortId, isolation, hiddenLines]);
 
   // Medida: dos marcas, la línea entre ellas y el cartel con la distancia
   useEffect(() => {
@@ -667,6 +807,7 @@ export const CanvasViewer: React.FC = () => {
     if (!scene || !measurePoints.length) {
       measureMidRef.current = null;
       measureDotsRef.current = [];
+      requestRenderRef.current();
       return;
     }
     const group = new THREE.Group();
@@ -691,10 +832,12 @@ export const CanvasViewer: React.FC = () => {
     }
     measureDotsRef.current = dots;
     scene.add(group);
+    requestRenderRef.current();
     return () => {
       scene.remove(group);
       disposeObject(group);
       measureDotsRef.current = [];
+      requestRenderRef.current();
     };
   }, [measurePoints]);
 
@@ -705,6 +848,7 @@ export const CanvasViewer: React.FC = () => {
     if (!scene || !renderer) return;
     if (!sectionBox) {
       renderer.clippingPlanes = [];
+      requestRenderRef.current();
       return;
     }
     const [x0, y0, z0] = sectionBox.min;
@@ -720,11 +864,13 @@ export const CanvasViewer: React.FC = () => {
     ];
     const helper = new THREE.Box3Helper(new THREE.Box3(new THREE.Vector3(x0, y0, z0), new THREE.Vector3(x1, y1, z1)), 0xf59e0b);
     scene.add(helper);
+    requestRenderRef.current();
     return () => {
       scene.remove(helper);
       helper.geometry.dispose();
       (helper.material as THREE.Material).dispose();
       renderer.clippingPlanes = [];
+      requestRenderRef.current();
     };
   }, [sectionBox]);
 
@@ -784,7 +930,10 @@ export const CanvasViewer: React.FC = () => {
     const activePort = selectedPortId ? graph.ports.get(selectedPortId) ?? null : null;
     // Sin modelo todavía, el primer tramo sale del origen
     const origin = activePort ? activePort.position.clone() : graph.components.size === 0 ? new THREE.Vector3(0, 0, 0) : null;
-    if (!origin || (activePort && activePort.connectedJointId)) return;
+    if (!origin || (activePort && activePort.connectedJointId)) {
+      requestRenderRef.current();
+      return;
+    }
 
     const overlay = (color: number, opacity = 1) =>
       new THREE.MeshBasicMaterial({ color, transparent: true, opacity, depthTest: false, depthWrite: false });
@@ -823,6 +972,7 @@ export const CanvasViewer: React.FC = () => {
         ring.renderOrder = 998;
         cursorGroup.add(ring);
       }
+      requestRenderRef.current();
       return;
     }
 
@@ -873,6 +1023,14 @@ export const CanvasViewer: React.FC = () => {
         gizmo.add(shaft, tip, hit);
       }
     }
+    if (showPlantCompass) {
+      gizmo.add(
+        buildPlantCompassGroup({
+          activeDir: arrowDir,
+          portDir: activePort?.direction ?? null
+        })
+      );
+    }
     cursorGroup.add(gizmo);
     gizmoRef.current = gizmo;
 
@@ -889,7 +1047,13 @@ export const CanvasViewer: React.FC = () => {
     handle.userData = { origin, dir: arrowDir };
     cursorGroup.add(handle);
     handleRef.current = handle;
-  }, [graph, version, selectedPortId, selectedComponentId, activeDirection, numpadValue, connectRoutes, connectIndex, connectTargetId, multiMode, stretch]);
+    requestRenderRef.current();
+  }, [graph, version, selectedPortId, selectedComponentId, activeDirection, numpadValue, connectRoutes, connectIndex, connectTargetId, multiMode, stretch, showPlantCompass]);
+
+  // Proyectar etiquetas cuando se encienden o cambian
+  useEffect(() => {
+    requestRenderRef.current();
+  }, [labels]);
 
   // Otra pieza elegida: se cierra la edición de la cota (salvo que se haya tocado la cota de una etiqueta)
   useEffect(() => {
@@ -901,15 +1065,61 @@ export const CanvasViewer: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedComponentId, version]);
 
-  // La referencia de obra se guarda con el proyecto: al cambiar de modelo se trae la suya
+  // La referencia de obra y los equipos se guardan con el proyecto: al cambiar de modelo se traen los suyos
   useEffect(() => {
     void useReferenceStore.getState().loadForActiveProject();
+    void useEquipmentStore.getState().loadForActiveProject();
   }, [graph]);
+
+  // Equipos de proceso (tanques, recipientes, bombas) con boquillas conectables
+  useEffect(() => {
+    const scene = sceneRef.current;
+    if (!scene || !equipmentItems.length) {
+      requestRenderRef.current();
+      return;
+    }
+    const group = new THREE.Group();
+    group.name = 'equipment-layer';
+    for (const eq of equipmentItems) {
+      if (!eq.visible) continue;
+      group.add(buildEquipmentGroup(eq, visualStyle));
+    }
+    scene.add(group);
+    equipmentGroupRef.current = group;
+    requestRenderRef.current();
+    return () => {
+      scene.remove(group);
+      disposeObject(group);
+      if (equipmentGroupRef.current === group) equipmentGroupRef.current = null;
+      requestRenderRef.current();
+    };
+  }, [equipmentItems, visualStyle]);
+
+  // Envolvente translúcida de aislación térmica (Toggle Insulation Display de Plant 3D)
+  useEffect(() => {
+    const scene = sceneRef.current;
+    if (!scene || !showInsulation || insulationThicknessMm <= 0 || graph.components.size === 0) {
+      requestRenderRef.current();
+      return;
+    }
+    const visibleIds = isolatedIds(graph, isolation, hiddenLines);
+    const group = buildInsulationGroup(graph, insulationThicknessMm, visibleIds);
+    scene.add(group);
+    requestRenderRef.current();
+    return () => {
+      scene.remove(group);
+      disposeObject(group);
+      requestRenderRef.current();
+    };
+  }, [showInsulation, insulationThicknessMm, graph, version, isolation, hiddenLines]);
 
   // Referencia de obra: las líneas del DXF, en gris, debajo del modelo
   useEffect(() => {
     const scene = sceneRef.current;
-    if (!scene || !reference || !reference.segments.length) return;
+    if (!scene || !reference || !reference.segments.length) {
+      requestRenderRef.current();
+      return;
+    }
     const positions = new Float32Array(reference.segments.length);
     for (let i = 0; i < positions.length; i++) positions[i] = reference.segments[i] * reference.scale;
     const geometry = new THREE.BufferGeometry();
@@ -919,11 +1129,13 @@ export const CanvasViewer: React.FC = () => {
     lines.userData.reference = true;
     scene.add(lines);
     refGroupRef.current = lines;
+    requestRenderRef.current();
     return () => {
       scene.remove(lines);
       geometry.dispose();
       (lines.material as THREE.Material).dispose();
       if (refGroupRef.current === lines) refGroupRef.current = null;
+      requestRenderRef.current();
     };
   }, [reference]);
 
@@ -971,15 +1183,14 @@ export const CanvasViewer: React.FC = () => {
   /** Encuadra una pieza (doble toque sobre ella) */
   const frameComponent = (compId: string) => {
     const comp = usePipingStore.getState().graph.components.get(compId);
-    const cam = cameraRef.current;
-    if (!comp || !cam) return;
+    if (!comp || !cameraRef.current) return;
     const box = new THREE.Box3();
     for (const p of comp.ports) box.expandByPoint(p.position);
     for (const pt of comp.centerline) box.expandByPoint(pt);
     if (box.isEmpty()) return;
     box.getCenter(cameraTargetRef.current);
     const span = Math.max(box.getSize(new THREE.Vector3()).length(), 300);
-    cameraDistanceRef.current = THREE.MathUtils.clamp((span * 1.9) / Math.min(1, cam.aspect * 1.05), 150, 35000);
+    cameraDistanceRef.current = THREE.MathUtils.clamp((span * 1.9) / Math.min(1, viewportAspect() * 1.05), 150, 35000);
     updateCameraPosition();
   };
 
@@ -1089,9 +1300,7 @@ export const CanvasViewer: React.FC = () => {
     const b = dir.dot(r);
     const denom = 1 - b * b;
     if (denom < 1e-3) return null;
-    const mmPerPx =
-      (2 * cameraRef.current.position.distanceTo(origin) * Math.tan(THREE.MathUtils.degToRad(cameraRef.current.fov / 2))) /
-      containerRef.current.clientHeight;
+    const mmPerPx = unitsPerPixelFor(cameraRef.current, origin, containerRef.current.clientHeight);
     return { t: (b * r.dot(w) - dir.dot(w)) / denom, step: mmPerPx < 1.2 ? 5 : mmPerPx < 8 ? 10 : 50 };
   };
 
@@ -1107,9 +1316,7 @@ export const CanvasViewer: React.FC = () => {
     if (denom < 1e-3) return; // el eje apunta a la cámara: no se puede medir
     const t = (b * r.dot(w) - drag.dir.dot(w)) / denom;
     // El paso depende del zoom: de cerca 5 mm, de lejos 50 mm
-    const mmPerPx =
-      (2 * cameraRef.current.position.distanceTo(drag.origin) * Math.tan(THREE.MathUtils.degToRad(cameraRef.current.fov / 2))) /
-      containerRef.current.clientHeight;
+    const mmPerPx = unitsPerPixelFor(cameraRef.current, drag.origin, containerRef.current.clientHeight);
     const step = mmPerPx < 1.2 ? 5 : mmPerPx < 8 ? 10 : 50;
     const length = Math.min(60000, Math.max(step, Math.round(t / step) * step));
     const state = usePipingStore.getState();
@@ -1298,6 +1505,41 @@ export const CanvasViewer: React.FC = () => {
           }
         }
 
+        // Prioridad 1.5: Boquillas de equipos de proceso y vigas de Pipe Rack
+        if (!handled && equipmentGroupRef.current && !store.multiMode && !store.connectPicking) {
+          const eqHits = raycaster.intersectObjects(equipmentGroupRef.current.children, true);
+          const nozzleHit = eqHits.find((h) => h.object.userData?.nozzleRef);
+          if (nozzleHit) {
+            const ref = nozzleHit.object.userData.nozzleRef as {
+              equipmentTag: string;
+              nozzleTag: string;
+              nominalDiameter: number;
+              position: [number, number, number];
+              direction: [number, number, number];
+            };
+            if (store.alignPicking) {
+              store.pickAlignTarget(new THREE.Vector3(...ref.position));
+            } else {
+              store.startFromNozzle(
+                new THREE.Vector3(...ref.position),
+                new THREE.Vector3(...ref.direction),
+                ref.nominalDiameter,
+                `${ref.equipmentTag} · ${ref.nozzleTag}`
+              );
+            }
+            if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate(20);
+            handled = true;
+          } else {
+            const rackHit = eqHits.find((h) => typeof h.object.userData?.rackLevelMm === 'number');
+            if (rackHit && store.selectedPortId) {
+              const levelMm = rackHit.object.userData.rackLevelMm as number;
+              store.goToElevation(levelMm, 'BOP');
+              if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate(15);
+              handled = true;
+            }
+          }
+        }
+
         // Prioridad 2: Selección de cualquier cañería o accesorio en 3D (Pipe, Tee, Codo, Brida, Válvula)
         if (!handled && pipeGroupRef.current) {
           const compHits = raycaster.intersectObjects(pipeGroupRef.current.children, true);
@@ -1380,12 +1622,22 @@ export const CanvasViewer: React.FC = () => {
         <ViewCube
           ref={cubeRef}
           style={phone ? { top: 'calc(var(--mobile-top) + 2px)', right: 0 } : { top: 104, right: 8 }}
+          projection={cameraProjection}
+          onToggleProjection={toggleCameraProjection}
+          onOrbit={(dx, dy) => {
+            viewAnimRef.current = null;
+            cameraAzimuthRef.current -= dx * 0.01;
+            cameraPolarRef.current = THREE.MathUtils.clamp(cameraPolarRef.current - dy * 0.01, 0.05, Math.PI - 0.05);
+            updateCameraPosition();
+          }}
           onView={(azimuth, polar) => {
             viewAnimRef.current = { azimuth, polar };
+            requestRenderRef.current();
           }}
           onHome={() => {
             viewAnimRef.current = { azimuth: -Math.PI / 4, polar: Math.PI / 3 };
             usePipingStore.getState().frameAll();
+            requestRenderRef.current();
           }}
         />
       )}

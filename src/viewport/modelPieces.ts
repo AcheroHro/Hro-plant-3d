@@ -22,6 +22,8 @@ export interface PieceSpec {
   build: () => THREE.Object3D | null;
 }
 
+import type { VisualStyle } from '../store/useUiConfigStore';
+
 /** Materiales del modelo. Viven mientras vive el visor, para que las mallas guardadas sigan siendo válidas */
 export interface ModelMaterials {
   pieces: PieceMaterials;
@@ -31,9 +33,22 @@ export interface ModelMaterials {
   fieldWeld: THREE.Material;
   weldBead: THREE.Material;
   support: Record<SupportKind, THREE.Material>;
-  /** Material liso de un color (vista por spools o de cambios de campo), uno por color */
+  /** Material liso de un color (vista por spools, líneas o cambios de campo), uno por color */
   color: (color: number) => THREE.Material;
+  /** Aplica estilo visual CAD (sombreado, rayos X, alámbrico o exterior) sin rehacer geometría */
+  setVisualStyle: (style: VisualStyle) => void;
   dispose: () => void;
+}
+
+function applyStyleToMaterial(mat: THREE.Material, style: VisualStyle): void {
+  const std = mat as THREE.MeshStandardMaterial;
+  const isXray = style === 'xray';
+  const isWire = style === 'wireframe';
+  std.transparent = isXray;
+  std.opacity = isXray ? 0.34 : 1;
+  std.depthWrite = !isXray;
+  std.wireframe = isWire;
+  std.needsUpdate = true;
 }
 
 export function createModelMaterials(): ModelMaterials {
@@ -53,6 +68,7 @@ export function createModelMaterials(): ModelMaterials {
   ) as unknown as Record<SupportKind, THREE.Material>;
   const colors = new Map<number, THREE.Material>();
   const all: THREE.Material[] = [];
+  let activeStyle: VisualStyle = 'shaded';
   const m: ModelMaterials = {
     pieces,
     collision: std({ color: 0xef4444, emissive: 0x7f1d1d, emissiveIntensity: 0.35, roughness: 0.3, metalness: 0.8, side: THREE.DoubleSide }),
@@ -65,10 +81,16 @@ export function createModelMaterials(): ModelMaterials {
       let mat = colors.get(color);
       if (!mat) {
         mat = std({ color, roughness: 0.45, metalness: 0.3, side: THREE.DoubleSide });
+        if (activeStyle !== 'shaded') applyStyleToMaterial(mat, activeStyle);
         colors.set(color, mat);
         all.push(mat);
       }
       return mat;
+    },
+    setVisualStyle: (style) => {
+      if (style === activeStyle) return;
+      activeStyle = style;
+      for (const mat of all) applyStyleToMaterial(mat, style);
     },
     dispose: () => all.forEach((mat) => mat.dispose())
   };

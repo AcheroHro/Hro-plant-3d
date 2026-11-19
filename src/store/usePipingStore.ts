@@ -40,12 +40,30 @@ export function lineOf(graph: PipingGraph, comp: { parameters: { lineNumber?: st
   return comp.parameters.lineNumber || graph.activeLineNumber || '';
 }
 
-/** Piezas visibles con el aislamiento actual; null = se ve todo */
-export function isolatedIds(graph: PipingGraph, isolation: Isolation | null): Set<string> | null {
-  if (!isolation) return null;
-  if (isolation.kind === 'run') return new Set(isolation.ids);
+/** Piezas visibles con el aislamiento actual y las líneas ocultas; null = se ve todo */
+export function isolatedIds(
+  graph: PipingGraph,
+  isolation: Isolation | null,
+  hiddenLines?: ReadonlySet<string> | null
+): Set<string> | null {
+  const hasHidden = Boolean(hiddenLines && hiddenLines.size > 0);
+  if (!isolation && !hasHidden) return null;
+  let base: Set<string> | null = null;
+  if (isolation) {
+    if (isolation.kind === 'run') {
+      base = new Set(isolation.ids);
+    } else {
+      base = new Set<string>();
+      for (const comp of graph.components.values()) if (lineOf(graph, comp) === isolation.line) base.add(comp.id);
+    }
+  }
+  if (!hasHidden) return base;
   const ids = new Set<string>();
-  for (const comp of graph.components.values()) if (lineOf(graph, comp) === isolation.line) ids.add(comp.id);
+  for (const comp of graph.components.values()) {
+    if (base && !base.has(comp.id)) continue;
+    if (hiddenLines!.has(lineOf(graph, comp))) continue;
+    ids.add(comp.id);
+  }
   return ids;
 }
 
@@ -99,6 +117,8 @@ export interface PipingState {
   connectIndex: number;
   /** Vista: solo se dibuja una línea o un tramo conectado */
   isolation: Isolation | null;
+  /** Líneas ocultas manualmente desde el Gestor de Líneas (como capas) */
+  hiddenLines: Set<string>;
   /** Medir: puntos tocados en el modelo (dos hacen una medida) */
   measureActive: boolean;
   measurePoints: THREE.Vector3[];
@@ -140,6 +160,10 @@ export interface PipingState {
   /** Aísla todo lo que está conectado a una pieza */
   isolateRun: (componentId: string) => void;
   clearIsolation: () => void;
+  /** Oculta o vuelve a mostrar una línea (como capas en Plant 3D) */
+  toggleLineHidden: (line: string) => void;
+  /** Vuelve a mostrar todas las líneas ocultas y quita el aislamiento */
+  showAllLines: () => void;
   toggleMeasure: (on?: boolean) => void;
   addMeasurePoint: (point: THREE.Vector3) => void;
   /** Caja de corte alrededor de la pieza elegida (o de la boca activa, o de todo el modelo) */
@@ -214,6 +238,8 @@ export interface PipingState {
   setNumpadValue: (val: string) => void;
   setSnappedPortId: (portId: string | null) => void;
   applyRouting: () => void;
+  /** Inicia un tramo de cañería directamente desde una boquilla de equipo */
+  startFromNozzle: (position: THREE.Vector3, direction: THREE.Vector3, nominalDiameter: number, label: string) => void;
   insertFitting: (
     type: ComponentType,
     options?: {
@@ -449,6 +475,7 @@ export const usePipingStore = create<PipingState>((set, get) => {
     connectRoutes: [],
     connectIndex: 0,
     isolation: null,
+    hiddenLines: new Set<string>(),
     measureActive: false,
     measurePoints: [],
     sectionBox: null,
@@ -634,8 +661,11 @@ export const usePipingStore = create<PipingState>((set, get) => {
     isolateLine: (line) => {
       const count = isolatedIds(get().graph, { kind: 'line', line })?.size ?? 0;
       if (!count) return set({ statusMessage: `No hay piezas en la línea ${line}.` });
+      const hidden = new Set(get().hiddenLines);
+      hidden.delete(line);
       set({
         isolation: { kind: 'line', line },
+        hiddenLines: hidden,
         triggerFrameAll: get().triggerFrameAll + 1,
         statusMessage: `Aislada la línea ${line}: ${count} pieza${count === 1 ? '' : 's'}. El resto del modelo queda oculto.`
       });
@@ -655,6 +685,30 @@ export const usePipingStore = create<PipingState>((set, get) => {
     clearIsolation: () => {
       if (!get().isolation) return;
       set({ isolation: null, triggerFrameAll: get().triggerFrameAll + 1, statusMessage: 'Se muestra todo el modelo.' });
+    },
+
+    toggleLineHidden: (line) => {
+      const next = new Set(get().hiddenLines);
+      const hiding = !next.has(line);
+      if (hiding) next.add(line);
+      else next.delete(line);
+      const iso = get().isolation;
+      const clearIso = hiding && iso?.kind === 'line' && iso.line === line;
+      set({
+        hiddenLines: next,
+        ...(clearIso ? { isolation: null } : {}),
+        statusMessage: hiding ? `Línea ${line} ocultada.` : `Línea ${line} visible.`
+      });
+    },
+
+    showAllLines: () => {
+      if (!get().isolation && get().hiddenLines.size === 0) return;
+      set({
+        isolation: null,
+        hiddenLines: new Set<string>(),
+        triggerFrameAll: get().triggerFrameAll + 1,
+        statusMessage: 'Se muestran todas las líneas del modelo.'
+      });
     },
 
     toggleMeasure: (on) => {
@@ -1564,6 +1618,52 @@ export const usePipingStore = create<PipingState>((set, get) => {
 
     setSnappedPortId: (portId) => set({ snappedPortId: portId }),
 
+    startFromNozzle: (position, direction, nominalDiameter, label) => {
+      const { graph, specReader, specCode } = get();
+      if (!specReader) return;
+
+      const start = position.clone();
+      const dir = direction.clone().normalize();
+
+      // Si ya hay una boca libre pegada a esa boquilla, solo la activamos
+      for (const port of graph.getOpenPorts()) {
+        if (port.position.distanceTo(start) < 25) {
+          set({
+            selectedPortId: port.id,
+            selectedComponentId: port.componentId,
+            activeDirection: port.direction.clone().normalize(),
+            nominalDiameter: port.nominalDiameter || nominalDiameter,
+            statusMessage: `Boca activa en ${label} (${formatSize(port.nominalDiameter)}).`
+          });
+          return;
+        }
+      }
+
+      const pipeSpec =
+        specReader.findPipe(nominalDiameter, specCode) ??
+        specReader.findPipe(get().nominalDiameter, specCode);
+      if (!pipeSpec) {
+        set({ statusMessage: `La spec no tiene caño de ${formatSize(nominalDiameter)} para ${label}.` });
+        return;
+      }
+
+      const initLen = Math.max(400, Math.round(pipeSpec.outerDiameter * 4));
+      pushUndoSnapshot();
+      const end = start.clone().addScaledVector(dir, initLen);
+      const pipe = graph.addPipe(start, end, pipeSpec, initLen);
+      saveGraphToIndexedDb(graph.serialize());
+      const collisions = detectPipingCollisions(graph);
+      set({
+        selectedPortId: pipe.ports[1].id,
+        selectedComponentId: pipe.id,
+        activeDirection: dir.clone(),
+        nominalDiameter: pipeSpec.nominalDiameter,
+        collidingComponentIds: collisions.collidingComponentIds,
+        version: get().version + 1,
+        statusMessage: `Tramo de ${initLen} mm iniciado desde boquilla ${label} (${formatSize(pipeSpec.nominalDiameter)}).`
+      });
+    },
+
     applyRouting: () => {
       const {
         graph,
@@ -2179,10 +2279,15 @@ export const usePipingStore = create<PipingState>((set, get) => {
     },
 
     focusComponent: (compId) => {
-      const { graph, isolation } = get();
-      if (!graph.components.has(compId)) return;
-      const visible = isolatedIds(graph, isolation);
-      if (visible && !visible.has(compId)) set({ isolation: null });
+      const { graph, isolation, hiddenLines } = get();
+      const comp = graph.components.get(compId);
+      if (!comp) return;
+      const visible = isolatedIds(graph, isolation, hiddenLines);
+      if (visible && !visible.has(compId)) {
+        const nextHidden = new Set(hiddenLines);
+        nextHidden.delete(lineOf(graph, comp));
+        set({ isolation: null, hiddenLines: nextHidden });
+      }
       if (get().sectionBox) set({ sectionBox: null });
       get().setSelectedComponentId(compId);
       set({ focusRequest: { id: compId, seq: (get().focusRequest?.seq ?? 0) + 1 } });
@@ -2535,8 +2640,8 @@ export const usePipingStore = create<PipingState>((set, get) => {
 
 usePipingStore.subscribe((state, prev) => {
   // Modelo nuevo: las ayudas de vista del anterior ya no valen
-  if (state.graph !== prev.graph && (state.isolation || state.sectionBox || state.measurePoints.length)) {
-    usePipingStore.setState({ isolation: null, sectionBox: null, measurePoints: [] });
+  if (state.graph !== prev.graph && (state.isolation || state.hiddenLines.size > 0 || state.sectionBox || state.measurePoints.length)) {
+    usePipingStore.setState({ isolation: null, hiddenLines: new Set<string>(), sectionBox: null, measurePoints: [] });
     return;
   }
   // Tramo aislado: sigue a las piezas que se agregan o se rehacen al trazar

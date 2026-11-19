@@ -39,3 +39,27 @@ export async function shareBytes(filename: string, bytes: Uint8Array, mimeType: 
     return false;
   }
 }
+
+/** Comparte uno o más archivos de texto/binario mediante Web Share API (WhatsApp, Mail, Drive) */
+export async function shareFiles(
+  entries: { filename: string; content: string | Uint8Array; mimeType: string }[],
+  title: string
+): Promise<boolean> {
+  if (typeof navigator === 'undefined' || !entries.length) return false;
+  const nav = navigator as Navigator & { canShare?: (d: ShareData) => boolean };
+  const files = entries.map(
+    (e) =>
+      new File(
+        [typeof e.content === 'string' ? e.content : (e.content as BlobPart)],
+        e.filename,
+        { type: e.mimeType }
+      )
+  );
+  if (!nav.share || !nav.canShare?.({ files })) return false;
+  try {
+    await nav.share({ files, title });
+    return true;
+  } catch {
+    return false;
+  }
+}

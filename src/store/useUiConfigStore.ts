@@ -17,6 +17,12 @@ export type ToolsLayoutMode = '1col' | '2col' | 'horiz';
 
 export type PropertyPreset = 'COMPACT' | 'WORKSHOP' | 'ENGINEERING';
 
+/** Proyección de la cámara 3D: perspectiva (3D natural) u ortográfica (sin distorsión, estilo CAD) */
+export type CameraProjection = 'perspective' | 'orthographic';
+
+/** Estilos visuales CAD del visor 3D */
+export type VisualStyle = 'shaded' | 'xray' | 'wireframe' | 'outdoor';
+
 export interface PaletteWindowState {
   isOpen: boolean;
   isCollapsed: boolean;
@@ -189,6 +195,28 @@ interface UiConfigState {
   /** Etiquetas permanentes en el modelo: cotas, elevaciones y número de línea */
   showLabels: boolean;
   toggleLabels: () => void;
+  /** Proyección de cámara (perspectiva u ortográfica) */
+  cameraProjection: CameraProjection;
+  setCameraProjection: (projection: CameraProjection) => void;
+  toggleCameraProjection: () => void;
+  /** Estilo visual del visor 3D (sombreado, rayos X, alámbrico, exterior) */
+  visualStyle: VisualStyle;
+  setVisualStyle: (style: VisualStyle) => void;
+  /** Colorear piezas por número de línea (estilo Plant 3D) */
+  colorByLine: boolean;
+  toggleColorByLine: () => void;
+  /** Compás circular graduado de Plant 3D sobre la boca activa */
+  showPlantCompass: boolean;
+  togglePlantCompass: () => void;
+  /** Envolvente de aislación térmica translúcida (estilo Toggle Insulation Display de Plant 3D) */
+  showInsulation: boolean;
+  toggleInsulation: () => void;
+  insulationThicknessMm: number;
+  setInsulationThickness: (mm: number) => void;
+  /** Barra inferior del teléfono colapsada para dar más pantalla al 3D */
+  dockCollapsed: boolean;
+  setDockCollapsed: (collapsed: boolean) => void;
+  toggleDockCollapsed: () => void;
   /** Lista de avisos de la revisión del modelo */
   issuesOpen: boolean;
   /** Paso del recorrido guiado, o null si no está en curso */
@@ -312,6 +340,112 @@ export const useUiConfigStore = create<UiConfigState>((set, get) => {
       }
       set({ showLabels: next });
     },
+    cameraProjection: (() => {
+      try {
+        return typeof window !== 'undefined' && window.localStorage.getItem('achero_p3d_proj_v1') === 'orthographic'
+          ? 'orthographic'
+          : 'perspective';
+      } catch {
+        return 'perspective';
+      }
+    })(),
+    setCameraProjection: (projection) => {
+      try {
+        window.localStorage.setItem('achero_p3d_proj_v1', projection);
+      } catch {
+        // Sin almacenamiento
+      }
+      set({ cameraProjection: projection });
+    },
+    toggleCameraProjection: () => {
+      const next: CameraProjection = get().cameraProjection === 'perspective' ? 'orthographic' : 'perspective';
+      get().setCameraProjection(next);
+    },
+    visualStyle: (() => {
+      try {
+        const v = typeof window !== 'undefined' ? window.localStorage.getItem('achero_p3d_vstyle_v1') : null;
+        return v === 'xray' || v === 'wireframe' || v === 'outdoor' ? v : 'shaded';
+      } catch {
+        return 'shaded';
+      }
+    })(),
+    setVisualStyle: (style) => {
+      try {
+        window.localStorage.setItem('achero_p3d_vstyle_v1', style);
+      } catch {
+        // Sin almacenamiento
+      }
+      set({ visualStyle: style });
+    },
+    colorByLine: (() => {
+      try {
+        return typeof window !== 'undefined' && window.localStorage.getItem('achero_p3d_color_line_v1') === '1';
+      } catch {
+        return false;
+      }
+    })(),
+    toggleColorByLine: () => {
+      const next = !get().colorByLine;
+      try {
+        window.localStorage.setItem('achero_p3d_color_line_v1', next ? '1' : '0');
+      } catch {
+        // Sin almacenamiento
+      }
+      set({ colorByLine: next });
+    },
+    showPlantCompass: (() => {
+      try {
+        return typeof window === 'undefined' || window.localStorage.getItem('achero_p3d_compass_v1') !== '0';
+      } catch {
+        return true;
+      }
+    })(),
+    togglePlantCompass: () => {
+      const next = !get().showPlantCompass;
+      try {
+        window.localStorage.setItem('achero_p3d_compass_v1', next ? '1' : '0');
+      } catch {
+        // Sin almacenamiento
+      }
+      set({ showPlantCompass: next });
+    },
+    showInsulation: (() => {
+      try {
+        return typeof window !== 'undefined' && window.localStorage.getItem('achero_p3d_insul_v1') === '1';
+      } catch {
+        return false;
+      }
+    })(),
+    toggleInsulation: () => {
+      const next = !get().showInsulation;
+      try {
+        window.localStorage.setItem('achero_p3d_insul_v1', next ? '1' : '0');
+      } catch {
+        // Sin almacenamiento
+      }
+      set({ showInsulation: next });
+    },
+    insulationThicknessMm: (() => {
+      try {
+        const raw = typeof window !== 'undefined' ? window.localStorage.getItem('achero_p3d_insul_mm_v1') : null;
+        const n = raw ? Number(raw) : 50;
+        return Number.isFinite(n) && n >= 10 && n <= 300 ? n : 50;
+      } catch {
+        return 50;
+      }
+    })(),
+    setInsulationThickness: (mm) => {
+      const clamped = Math.max(10, Math.min(300, Math.round(mm)));
+      try {
+        window.localStorage.setItem('achero_p3d_insul_mm_v1', String(clamped));
+      } catch {
+        // Sin almacenamiento
+      }
+      set({ insulationThicknessMm: clamped, showInsulation: true });
+    },
+    dockCollapsed: false,
+    setDockCollapsed: (collapsed) => set({ dockCollapsed: collapsed }),
+    toggleDockCollapsed: () => set((s) => ({ dockCollapsed: !s.dockCollapsed })),
     issuesOpen: false,
     tourStep: null,
 
